@@ -1,7 +1,7 @@
 # FUZZYLLI: Fuzzy Dark Matter Filaments that look like Rigatoni
 <div align="center">
 <img
-src="https://github.com/timzimm/fuzzylli/blob/34f10d39c8c4e038c3d2957568c5e6047c86d4a9/images/volume_rendering.png" alt="logo"></img>
+src="https://github.com/timzimm/fuzzylli/blob/16ed0c6c6734a110f25903b610e091ab10298fb0/images/filament_crosssections.png" alt="logo"></img>
 </div>
 
 ## What is FUZZYLLI
