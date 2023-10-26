@@ -5,7 +5,7 @@ src="https://github.com/timzimm/fuzzylli/blob/16ed0c6c6734a110f25903b610e091ab10
 </div>
 
 ## What is fuzzylli
-TODO
+This is a research project. Expect bugs.
 
 ## Installation
 fuzzylli is pre-alpha and currently meant as an internal tool.For installation
@@ -15,6 +15,6 @@ fuzzylli is pre-alpha and currently meant as an internal tool.For installation
 To recreate the "eyes of sauron" plot at the top open ... which showcases the
 main functionalty of fuzzylli.
 
-## Citation
+## Citing fuzzylli
 If you use fuzzylli for any publication we kindly ask you to cite
 TODO
