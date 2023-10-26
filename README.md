@@ -5,6 +5,17 @@ src="https://github.com/timzimm/fuzzylli/blob/16ed0c6c6734a110f25903b610e091ab10
 </div>
 
 ## What is fuzzylli
+fuzzylli is a tool to postprocess fuzzy dark matter (FDM) interference fringes
+onto cosmic filaments. It does so by both adapting and unifying existing approaches for halo
+interference reconstruction. The result is an effective, and efficient surrogate
+model for the FDM wave function in cylindrical symmetry. fuzzylli is built on
+jax such that compuation of observables involving the FDM wavefunction
+(including its derivatives via `jax.grad`) are trivial (thanks to `jax.vmap`) and 
+efficient (thanks to `jax.jit`) to implement.
+
+
+An in depth exposition of our model and its application can be found our
+paper...
 This is a research project. Expect bugs.
 
 ## Installation
