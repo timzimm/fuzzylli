@@ -29,3 +29,8 @@ main functionalty of fuzzylli.
 ## Citing fuzzylli
 If you use fuzzylli for any publication we kindly ask you to cite
 TODO
+
+<div align="center">
+<img
+src="https://github.com/timzimm/fuzzylli/blob/820bc2c270556f4b9208f09224c53764eb6651d1/images/eu_acknowledgement_compsci_3.png" alt="logo"></img>
+</div>
