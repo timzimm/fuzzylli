@@ -1,7 +1,7 @@
 # fuzzylli: Reconstruction for Fuzzy Dark Matter Filaments
 <div align="center">
 <img
-src="https://github.com/timzimm/fuzzylli/blob/16ed0c6c6734a110f25903b610e091ab10298fb0/images/filament_crosssections.png" alt="logo"></img>
+src="https://github.com/timzimm/fuzzylli/blob/5b5b6bd7d66a69f3de60b184f99e43f75080f0c9/images/crosssections.png" alt="logo"></img>
 </div>
 
 ## What is fuzzylli
