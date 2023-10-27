@@ -32,7 +32,7 @@ The name is inspired by the Fussilli noodle (wavy long pasta). We gloss over the
 fact that the final filaments look more like Rigatoni at the moment
 <div align="center">
 <img
-src="https://github.com/timzimm/fuzzylli/blob/2f6bcfa22dd8e5464ef896dec482c9aafd6bd6e0/images/volume_rendering.png" alt="logo"></img>
+src="https://github.com/timzimm/fuzzylli/blob/2f6bcfa22dd8e5464ef896dec482c9aafd6bd6e0/images/volume_rendering.png" alt="logo" width="1100" height="800"></img>
 </div>
 
 **This is a research project. Expect bugs, report bugs, fix more bugs than you
@@ -66,6 +66,7 @@ function of FDM mass,  open ... which showcases the main functionalty of fuzzyll
 If you use fuzzylli for any publication we kindly ask you to cite
 TODO
 
+## Acknowledgement
 <div align="center">
 <img
 src="https://github.com/timzimm/fuzzylli/blob/820bc2c270556f4b9208f09224c53764eb6651d1/images/eu_acknowledgement_compsci_3.png" alt="logo"></img>
