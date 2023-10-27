@@ -7,9 +7,19 @@ src="https://github.com/timzimm/fuzzylli/blob/5b5b6bd7d66a69f3de60b184f99e43f750
 ## What is fuzzylli
 fuzzylli is a tool to postprocess fuzzy dark matter (FDM) interference fringes
 onto cosmic filaments. It does so by both adapting and unifying existing approaches for halo
-interference reconstruction. The result is an effective, and efficient surrogate
-model for the FDM wave function in cylindrical symmetry. We refer to [our
-paper](#citing-fuzzylli)
+interference reconstruction, most notably:
+
+[1] [Yavetz et al. (2021)](https://arxiv.org/abs/2109.06125):
+Construction of Wave Dark Matter Halos: Numerical Algorithm and Analytical Constraints
+<br>
+[2] [Lin et al. (2018)](https://arxiv.org/abs/1801.02320):
+Self-consistent construction of virialized wave dark matter halos
+<br>
+[3] [Dalal et al. (2021)](https://arxiv.org/abs/2011.13141):
+Don't cross the streams: caustics from fuzzy dark matter
+
+The result is an effective, and efficient surrogate model for the FDM wave function in 
+cylindrical symmetry. We refer to [our paper](#citing-fuzzylli)
 for an in depth exposition of fuzzylli's underlying assumptions, physics and application
 to cosmology.
 
@@ -49,8 +59,8 @@ The latter might need some manual compilation labor. We refer to the [h5py
 Documentation](https://docs.h5py.org/en/latest/mpi.html) for more information.
 
 ## Example
-To recreate the "eyes of sauron" plot at the top open ... which showcases the
-main functionalty of fuzzylli.
+To recreate the "eyes of sauron" plot at the top, i.e. filament cross sections as a 
+function of FDM mass,  open ... which showcases the main functionalty of fuzzylli.
 
 ## Citing fuzzylli
 If you use fuzzylli for any publication we kindly ask you to cite
