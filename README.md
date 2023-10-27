@@ -1,7 +1,7 @@
 # fuzzylli: Reconstruction for Fuzzy Dark Matter Filaments
 <div align="center">
 <img
-src="https://github.com/timzimm/fuzzylli/blob/5b5b6bd7d66a69f3de60b184f99e43f75080f0c9/images/crosssections.png" alt="logo"></img>
+src="https://github.com/timzimm/fuzzylli/blob/2aecf2029754e7ef9d86a9b11a99cb1d6d2603c6/images/crosssections.png" alt="logo" width="750"></img>
 </div>
 
 ## What is fuzzylli
@@ -10,13 +10,13 @@ onto cosmic filaments. It does so by both adapting and unifying existing approac
 interference reconstruction, most notably:
 
 [1] [Yavetz et al. (2021)](https://arxiv.org/abs/2109.06125):
-Construction of Wave Dark Matter Halos: Numerical Algorithm and Analytical Constraints
+_Construction of Wave Dark Matter Halos: Numerical Algorithm and Analytical Constraints_
 <br>
 [2] [Lin et al. (2018)](https://arxiv.org/abs/1801.02320):
-Self-consistent construction of virialized wave dark matter halos
+_Self-consistent construction of virialized wave dark matter halos_
 <br>
 [3] [Dalal et al. (2021)](https://arxiv.org/abs/2011.13141):
-Don't cross the streams: caustics from fuzzy dark matter
+_Don't cross the streams: caustics from fuzzy dark matter_
 
 <div align="center">
 <img
