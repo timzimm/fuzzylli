@@ -19,7 +19,7 @@ Self-consistent construction of virialized wave dark matter halos
 Don't cross the streams: caustics from fuzzy dark matter
 
 <img
-src="https://github.com/timzimm/fuzzylli/blob/30f4887b2a3e4540802fb37820c8089c5ab3c155/images/comparison.png" alt="logo" width="700" align="center">
+src="https://github.com/timzimm/fuzzylli/blob/f9c2837d4751126b554df11d34bd336dab683a42/images/comparison.png" alt="logo" width="700" align="center">
 
 The result is an effective, and efficient surrogate model for the FDM wave function in 
 cylindrical symmetry. We refer to [our paper](#citing-fuzzylli)
