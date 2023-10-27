@@ -18,6 +18,9 @@ Self-consistent construction of virialized wave dark matter halos
 [3] [Dalal et al. (2021)](https://arxiv.org/abs/2011.13141):
 Don't cross the streams: caustics from fuzzy dark matter
 
+<img
+src="https://github.com/timzimm/fuzzylli/blob/2f6bcfa22dd8e5464ef896dec482c9aafd6bd6e0/images/volume_rendering.png" alt="logo" width="450" align="right">
+
 The result is an effective, and efficient surrogate model for the FDM wave function in 
 cylindrical symmetry. We refer to [our paper](#citing-fuzzylli)
 for an in depth exposition of fuzzylli's underlying assumptions, physics and application
@@ -27,13 +30,8 @@ fuzzylli is built on [jax](https://github.com/google/jax) such that compuation o
 involving the FDM wavefunction
 (including its derivatives via `jax.grad`) are trivial (thanks to `jax.vmap`) and 
 efficient (thanks to `jax.jit`) to implement.
-
 The name is inspired by the Fussilli noodle (wavy long pasta). We gloss over the
 fact that the final filaments look more like Rigatoni at the moment
-<div align="center">
-<img
-src="https://github.com/timzimm/fuzzylli/blob/2f6bcfa22dd8e5464ef896dec482c9aafd6bd6e0/images/volume_rendering.png" alt="logo" width="600"></img>
-</div>
 
 **This is a research project. Expect bugs, report bugs, fix more bugs than you
 create.**
