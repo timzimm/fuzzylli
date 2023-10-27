@@ -19,6 +19,10 @@ efficient (thanks to `jax.jit`) to implement.
 
 The name is inspired by the Fussilli noodle (wavy long pasta). We gloss over the
 fact that the final filaments look more like Rigatoni at the moment
+<div align="center">
+<img
+src="https://github.com/timzimm/fuzzylli/blob/2f6bcfa22dd8e5464ef896dec482c9aafd6bd6e0/images/volume_rendering.png" alt="logo"></img>
+</div>
 
 **This is a research project. Expect bugs, report bugs, fix more bugs than you
 create.**
