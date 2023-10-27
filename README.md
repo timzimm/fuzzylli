@@ -20,7 +20,7 @@ _Don't cross the streams: caustics from fuzzy dark matter_
 
 <div align="center">
 <img
-src="https://github.com/timzimm/fuzzylli/blob/f9c2837d4751126b554df11d34bd336dab683a42/images/comparison.png" alt="logo" width="750" align="center">
+src="https://github.com/timzimm/fuzzylli/blob/0d792d8d018cb6a44108581965902cfc148f8aeb/images/comparison.png" alt="logo" width="750" align="center">
 </div>
 
 The result is an effective, and efficient surrogate model for the FDM wave function in 
