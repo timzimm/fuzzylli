@@ -38,7 +38,7 @@ $ cd fuzzylli
 $ pip install -e .
 ```
 If you want to be able to populate three dimensional boxes with a cylinder gas
-(i.e. using (generate_density.py)[https://github.com/timzimm/fuzzylli/blob/3c4ba7e048d663de7ae41750a81384ec8030dd77/fuzzylli/generate_density.py]),
+(i.e. using [generate_density.py](https://github.com/timzimm/fuzzylli/blob/3c4ba7e048d663de7ae41750a81384ec8030dd77/fuzzylli/generate_density.py)),
 replace the last command with:
 ```console
 $ pip install -e ".[3D]"
