@@ -34,6 +34,7 @@ involving the FDM wavefunction
 efficient (thanks to `jax.jit`) to implement.
 The name is inspired by the Fussilli noodle (wavy long pasta). We gloss over the
 fact that the final filaments look more like Rigatoni at the moment
+:man_shrugging:.
 
 **This is a research project. Expect bugs, report bugs, fix more bugs than you
 create.**
