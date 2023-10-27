@@ -13,7 +13,8 @@ paper](#citing-fuzzylli)
 for an in depth exposition of fuzzylli's underlying assumptions, physics and application
 to cosmology.
 
-fuzzylli is built on jax such that compuation of observables involving the FDM wavefunction
+fuzzylli is built on [jax](https://github.com/google/jax) such that compuation of observables 
+involving the FDM wavefunction
 (including its derivatives via `jax.grad`) are trivial (thanks to `jax.vmap`) and 
 efficient (thanks to `jax.jit`) to implement.
 
