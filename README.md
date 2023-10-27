@@ -37,7 +37,7 @@ fact that the final filaments look more like Rigatoni at the moment
 :man_shrugging:.
 
 Loosely related, fuzzylli also provides a differentiable jax implementation of
-the ellipsoidal collapse model, making an end-to-end computatation of mass
+the ellipsoidal collapse model, making an end-to-end computation of mass
 functions (filaments, haloes, sheets) possible without the need to invoke literature fit 
 results.
 
