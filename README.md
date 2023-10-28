@@ -1,8 +1,9 @@
-# fuzzylli: Reconstruction for Fuzzy Dark Matter Filaments
 <div align="center">
 <img
-src="https://github.com/timzimm/fuzzylli/blob/2aecf2029754e7ef9d86a9b11a99cb1d6d2603c6/images/crosssections.png" alt="logo" width="750"></img>
+src="https://github.com/timzimm/fuzzylli/blob/3e972ebae28f78273f88248e488dea43f7fcc31a/images/logo.png" alt="logo" width="150"></img>
 </div>
+
+# fuzzylli: Interference Fringes for Cosmic Filaments
 
 ## What is fuzzylli
 fuzzylli is a tool to postprocess fuzzy dark matter (FDM) interference fringes
@@ -18,10 +19,11 @@ _Self-consistent construction of virialized wave dark matter halos_
 [3] [Dalal et al. (2021)](https://arxiv.org/abs/2011.13141):
 _Don't cross the streams: caustics from fuzzy dark matter_
 
-<div align="center">
-<img
-src="https://github.com/timzimm/fuzzylli/blob/0d792d8d018cb6a44108581965902cfc148f8aeb/images/comparison.png" alt="logo" width="750" align="center">
-</div>
+<figure>
+  <img src="https://github.com/timzimm/fuzzylli/blob/0d792d8d018cb6a44108581965902cfc148f8aeb/images/comparison.png" alt="" width="750" align="center">
+  <figcaption align="center">Comparison between fuzzylli and AXIGADGET, a state of the
+  integrator for the full-fledged Schrödinger-Poisson equation</figcaption>
+</figure>
 
 The result is an effective, and efficient surrogate model for the FDM wave function in 
 cylindrical symmetry. We refer to [our paper](#citing-fuzzylli)
@@ -32,6 +34,17 @@ fuzzylli is built on [jax](https://github.com/google/jax) such that compuation o
 involving the FDM wavefunction
 (including its derivatives via `jax.grad`) are trivial (thanks to `jax.vmap`) and 
 efficient (thanks to `jax.jit`) to implement.
+
+<figure>
+  <img src="https://github.com/timzimm/fuzzylli/blob/2aecf2029754e7ef9d86a9b11a99cb1d6d2603c6/images/crosssections.png" alt="" width="750" align="center">
+  <figcaption align="center">Filament cross sections as a function of axion/FDM mass</figcaption>
+</figure>
+
+<div align="center">
+<img
+src="" alt="logo" width="750"></img>
+</div>
+
 The name is inspired by the Fussilli noodle (wavy long pasta). We gloss over the
 fact that the final filaments look more like Rigatoni at the moment
 :man_shrugging:.
