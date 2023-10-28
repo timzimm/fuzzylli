@@ -24,6 +24,7 @@ _Don't cross the streams: caustics from fuzzy dark matter_
   <figcaption align="center">Comparison between fuzzylli and AXIGADGET, a state of the
   integrator for the full-fledged Schrödinger-Poisson equation</figcaption>
 </figure>
+<br/><br/>
 
 The result is an effective, and efficient surrogate model for the FDM wave function in 
 cylindrical symmetry. We refer to [our paper](#citing-fuzzylli)
@@ -39,12 +40,7 @@ efficient (thanks to `jax.jit`) to implement.
   <img src="https://github.com/timzimm/fuzzylli/blob/2aecf2029754e7ef9d86a9b11a99cb1d6d2603c6/images/crosssections.png" alt="" width="750" align="center">
   <figcaption align="center">Filament cross sections as a function of axion/FDM mass</figcaption>
 </figure>
-
-<div align="center">
-<img
-src="" alt="logo" width="750"></img>
-</div>
-
+<br/><br/>
 The name is inspired by the Fussilli noodle (wavy long pasta). We gloss over the
 fact that the final filaments look more like Rigatoni at the moment
 :man_shrugging:.
