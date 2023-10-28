@@ -4,6 +4,10 @@ src="https://github.com/timzimm/fuzzylli/blob/3e972ebae28f78273f88248e488dea43f7
 </div>
 
 # fuzzylli: Interference Fringes for Cosmic Filaments
+[**What is Fuzzylli**](#what-is-fuzzylli)
+| [**Installation**](#installation)
+| [**Example**](#example)
+| [**Citing Fuzzylli**](#citing-fuzzylli)
 
 ## What is fuzzylli
 fuzzylli is a tool to postprocess fuzzy dark matter (FDM) interference fringes
