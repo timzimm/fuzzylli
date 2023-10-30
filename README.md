@@ -25,7 +25,7 @@ _Don't cross the streams: caustics from fuzzy dark matter_
 
 <figure>
   <img src="https://github.com/timzimm/fuzzylli/blob/0d792d8d018cb6a44108581965902cfc148f8aeb/images/comparison.png" alt="" width="750" align="center">
-  <figcaption align="center">Comparison between fuzzylli and AXIGADGET, a state of the
+  <figcaption align="center">Comparison between fuzzylli and AXIREPO, a state of the
   integrator for the full-fledged Schrödinger-Poisson equation</figcaption>
 </figure>
 <br/><br/>
