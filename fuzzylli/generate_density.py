@@ -133,19 +133,6 @@ init_rays_params = jax.vmap(init_ray_params)
 
 config.update("jax_enable_x64", True)
 
-save_dir = "../data"
-cache_dir = f"{save_dir}/cache"
-prefix = "cylinder_gas/cylinder_gas"
-logging.basicConfig(
-    level=logging.INFO,
-    format="\x1b[33;20m%(asctime)s {}\x1b[0m: %(message)s".format(socket.gethostname()),
-)
-logger = logging.getLogger(__name__)
-
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
-size = comm.Get_size()
-
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--nocdm", help="omit CDM density construction", action="store_true"
@@ -157,15 +144,32 @@ parser.add_argument(
     "--nofdm", help="omit FDM density construction", action="store_true"
 )
 parser.add_argument("--save_coord", help="save coordinates", action="store_true")
+
+parser.add_argument("save_dir", type=str, help="Directory HDF5 will be saved to")
+parser.add_argument("prefix", type=str, help="filename prefix")
 args = parser.parse_args()
 
+cache_dir = f"{args.save_dir}/cache"
+prefix = args.prefix
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="\x1b[33;20m%(asctime)s {}\x1b[0m: %(message)s".format(socket.gethostname()),
+)
+logger = logging.getLogger(__name__)
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+
+
 # Units setup
-m22 = 4.0
+m22 = 2.0
 u = set_schroedinger_units(m22)
 
 # Box setup
-MM = 4096
-L = 2.0 * u.from_Mpc / h
+MM = 512
+L = 0.25 * h * u.from_Mpc / h
 if rank == 0:
     logger.info(f"dx = {L * u.to_Mpc/MM} Mpc")
 
@@ -175,7 +179,7 @@ z_fit = 4
 a_fit = 1.0 / (1 + z_fit)
 beta = 0.0
 N = 8
-N_true = 8
+N_true = 1
 # Sampling of FMF only works at z=4
 assert z_fit == 4
 
@@ -189,13 +193,13 @@ domain = UniformHypercube(
     [1, 1, 1],
     jnp.array([[0.0, L], [0.0, L], [0.0, L]]),
 )
-filename = f"{save_dir}/{prefix}_m_{m22:.2f}_beta_{beta:.2f}_z_{z_fit:.2f}_L_{L*u.to_Mpc:.2f}_N_{N_true}_M_{MM}.h5"
+filename = f"{args.save_dir}/{args.prefix}_m_{m22:.2f}_beta_{beta:.2f}_z_{z_fit:.2f}_L_{L*u.to_Mpc:.2f}_N_{N_true}_M_{MM}.h5"
 
 if rank == 0:
     Mmin = 3e9  # Msun h^-1
 
     M_cylinder = sample_mass_from_powerlaw_dn_dM(N, Mmin, seed=seed)  # Msun h^-1
-    # M_cylinder = jnp.array([5e9])
+    M_cylinder = jnp.array([5e9])
     lengths = cylinder_length_physical_Mpc(M_cylinder) * u.from_Mpc / (h * a_fit)
     r0 = h**-1 * cylinder_scale_radius_physical_Mpc(M_cylinder, beta) * u.from_Mpc
 
@@ -207,22 +211,22 @@ if rank == 0:
     d = jnp.max(lengths)
     r = 10 * jnp.max(r0)
 
-    spine_gas_params = init_finite_straight_filament_spine_gas(
-        N, r, d, seed + 1, domain, lengths
-    )
-    spine_gas_params = spine_gas_params[:N_true]
+    # spine_gas_params = init_finite_straight_filament_spine_gas(
+    #     N, r, d, seed + 1, domain, lengths
+    # )
+    # spine_gas_params = spine_gas_params[:N_true]
 
-    # spine_dir = jnp.array([1.0, 0.0, 0.0])
-    # spine_dir = spine_dir / np.linalg.norm(spine_dir)
-    # spine_gas_params = [
-    #     finite_straight_filament_spine_params(
-    #         ray_params=init_rays_params(
-    #             jnp.array([0.5 * L, 0.5 * L, 0.5 * L]), spine_dir
-    #         ),
-    #         length=jnp.asarray([lengths[0]]),
-    #         orientation=jnp.array([0.0, 1.0, 0.0]),
-    #     )
-    # ]
+    spine_dir = jnp.array([1.0, 0.0, 0.0])
+    spine_dir = spine_dir / np.linalg.norm(spine_dir)
+    spine_gas_params = [
+        finite_straight_filament_spine_params(
+            ray_params=init_rays_params(
+                jnp.array([0.5 * L, 0.5 * L, 0.5 * L]), spine_dir
+            ),
+            length=jnp.asarray([L]),
+            orientation=jnp.array([0.0, 1.0, 0.0]),
+        )
+    ]
 
     logger.info(f"{len(spine_gas_params)} cylinder(s) placed")
 
@@ -337,8 +341,8 @@ translations = UniformHypercube(
 )
 for idx in range(N_true):
     vs = []
-    for v in jnp.array(jnp.array([L, L, L]) * translations.cell_centers_cartesian):
-        # for v in [0]:
+    # for v in jnp.array(jnp.array([L, L, L]) * translations.cell_centers_cartesian):
+    for v in [0]:
         r = (
             rhos_bg[idx].R99
             if args.nofdm and args.nowdm
@@ -364,7 +368,7 @@ for idx in range(N_true):
 comm.Barrier()
 if rank == 0:
     f.close()
-f = h5py.File(filename, "r+", driver="mpio", libver="latest", comm=comm)
+f = h5py.File(filename, "r+", driver="mpio", comm=comm)
 f.atomic = False
 
 if args.save_coord:
@@ -376,8 +380,6 @@ if args.save_coord:
     R_xyz = np.zeros(shape=MM_loc)
     if len(filaments_in_box) > 0:
         xyz = jax.lax.stop_gradient(domain.cell_centers_cartesian)
-        print(xyz.shape)
-        print(R_xyz.shape)
     for idx, vs in filaments_in_box.items():
         for v in vs:
             filament_spine = finite_straight_filament_spine_params(
@@ -487,6 +489,7 @@ if not args.nocdm:
         grp = f.create_group("density")
     grp = f["density"]
     dset = create_ds(grp, "cdm", (MM, MM, MM))
+    logger.info(vs)
 
     if len(filaments_in_box) > 0:
         rho_xyz[:] = 0.0
