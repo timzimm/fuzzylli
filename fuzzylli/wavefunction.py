@@ -9,7 +9,7 @@ from jax.scipy.special import erf
 from jaxopt._src.tree_util import tree_map
 import jax.numpy as jnp
 
-from jaxopt import ProximalGradient
+from jaxopt import ProximalGradient, GradientDescent, LBFGS
 from jaxopt.prox import prox_non_negative_lasso
 
 from fuzzylli.interpolation_jax import eval_interp1d as evaluate_spline
@@ -245,6 +245,109 @@ def init_wavefunction_params_poisson_process(
     )
     # Each nl gets a random phase but modes with same l alwazs have the same
     # |a_nl|
+    phase_j = jnp.where(
+        (reduced_library.l_of_j > 0).reshape(-1, 1),
+        jnp.exp(
+            1.0j
+            * random.uniform(
+                seed_phase,
+                shape=(reduced_library.J, 2),
+                maxval=2 * jnp.pi,
+            )
+        ),
+        1.0 / 2,
+    )
+    logger.info(
+        f"{non_zero_modes_j[0].shape[0]}/{eigenstate_library.J} modes have non-vanishing coefficents"
+    )
+    return wavefunction_params(
+        total_mass=total_mass,
+        eigenstate_library=reduced_library,
+        R_fit=R_fit,
+        a_j=jnp.sqrt(aj_2),
+        phase_j=phase_j,
+    )
+
+
+def init_wavefunction_params_least_square_naive(
+    eigenstate_library,
+    rho_target,
+    df,
+    R_fit,
+    seed,
+):
+    """
+    Initializes the wave function coefficients via an adaptive LASSO reggression
+    fit. The posterior mode is found via proximal gradient descent.
+    """
+    # TODO: Move this somewhere else
+    # Creates system matrix. Observations along axis 0 and states j along axis 1
+    # These parameters have to be fixed artificially under gaussian noise
+    # conditions.
+    N_fit = 4 * eigenstate_library.J
+    sigma = 0.1
+
+    seed_sampling, seed_phase = random.split(random.PRNGKey(seed), 2)
+    R, log_rho_R_noisy = data_generation_gaussian_noise(
+        rho_target, R_fit, N_fit, seed_sampling, sigma
+    )
+    logger.info(f"fit interval = [{R[0]},{R[-1]}]")
+    N_fit = R.shape[0]
+
+    total_mass = rho_target.total_mass
+
+    # WKB asymptote as scale of the exponential prior. Postivity of all
+    # coefficients (prior support) is enforced by the proximal operator.
+    prior_lambda_j = (
+        total_mass
+        * (2 * jnp.pi) ** -2
+        * df(
+            eigenstate_library.E_j,
+            L(eigenstate_library.l_of_j),
+        )
+        ** (-1)
+    )
+
+    # System matrix. Note that the eigenstate library only contains R_j modes for
+    # l>=0 since the Hamiltoniain is invariant under l -> -l. Since we assume
+    # |a_nl| = |a_n-l| we get un overall factor of 2 for l>0 modes which we
+    # account for in the system matrix
+    prefactor = jnp.where(eigenstate_library.l_of_j > 0, 2.0, 1.0)
+    R_j2_R = (
+        prefactor[jnp.newaxis, :]
+        * total_mass
+        / (2 * jnp.pi)
+        * eval_mult_splines_mult_x(R, eigenstate_library.R_j_params) ** 2
+    )
+
+    @jit
+    def neg_log_likelihood(aj_2):
+        log_rho_psi = jnp.log(R_j2_R @ aj_2)
+        return jnp.mean((log_rho_psi - log_rho_R_noisy) ** 2)
+
+    logger.info("Running least square optimization (LBFGS)...")
+    R_j2_R = R_j2_R / prior_lambda_j
+
+    solver = LBFGS(
+        fun=neg_log_likelihood,
+        maxiter=1000,
+        tol=1e-4,
+    )
+    res = solver.run(1.0 * jnp.ones_like(prior_lambda_j))
+    aj_2 = res.params / prior_lambda_j
+
+    logger.info(
+        f"Optimization stopped after {res.state.iter_num} "
+        f"iterations (error = {res.state.error:.5f})"
+    )
+    non_zero_modes_j = jnp.nonzero(aj_2)
+    aj_2 = aj_2[non_zero_modes_j]
+    reduced_library = tree_map(
+        lambda coefs: coefs[non_zero_modes_j], eigenstate_library
+    )
+    # Each nl gets a random phase but modes with same l always have the same
+    # |a_nl|. We divide the l=0 mode to allow for more straightforward
+    # computation in rho(...) below
     phase_j = jnp.where(
         (reduced_library.l_of_j > 0).reshape(-1, 1),
         jnp.exp(

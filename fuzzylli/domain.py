@@ -10,6 +10,9 @@ class UniformHypercube:
         self.dtype = self._extends.dtype
         self._points = jnp.array([])
 
+    def __repr__(self):
+        return f"UniformHypercube(\n N = {self.N},\n extends={self._extends},\n L={self.L})"
+
     @property
     def dim(self):
         return self._dim

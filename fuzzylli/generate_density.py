@@ -30,26 +30,25 @@ from fuzzylli.io_utils import (
     load_or_compute_model,
     save_dict_to_group,
     dictify,
+    load_parameters_from_config,
 )
 from fuzzylli.eigenstates import eigenstate_library, init_eigenstate_library
 from fuzzylli.ray import init_ray_params
-from fuzzylli.parameters_from_ellipsoidal_collapse import (
-    cylinder_length_physical_Mpc,
-    sample_mass_from_powerlaw_dn_dM,
-    cylinder_scale_radius_physical_Mpc,
-    cylinder_sqrt_v_dispersion_physical_kms,
-)
 from fuzzylli.cosmology import h
 from fuzzylli.df import ConstantAnisotropyDistribution
 
 
 def init_wavefunction(params_rho, df_args, N, seed):
+    """
+    Bulk init of all componenets leading to wavfunction fit, including
+    wavefunction itself.
+    """
     a_fit = params_rho["scalefactor"]
     rho = SteadyStateCylinder(**params_rho)
     V = AxialSymmetricPotential(lambda R: rho(R) / a_fit, rho.R999)
     eigenstate_args = {
-        "for_name": [a_fit, V, rho.R99, K],
-        "for_compute": [a_fit, V, rho.R99, K],
+        "for_name": [a_fit, V, rho.R99, N],
+        "for_compute": [a_fit, V, rho.R99, N],
     }
     eigenstate_lib = load_or_compute_model(
         True,
@@ -81,6 +80,7 @@ def init_wavefunction(params_rho, df_args, N, seed):
     return wavefunction_params
 
 
+# 3D densities as finite extrusions ...
 def _fdm_cylinder(x, t, spine_params, wavefunction_params):
     return generic_finite_cylinder_density(
         lambda R, phi, wavefunction_params: jnp.abs(
@@ -111,6 +111,7 @@ def _cdm_cylinder(x, spine_params, rho_bg, R_cut):
     )
 
 
+# ... batched on coordinate x. map instead of vmap to limit memory footprint
 def eval_fdm_cylinder_density(x, t, spine_params, wavefunction_params):
     return jax.lax.map(
         lambda x: _fdm_cylinder(x, t, spine_params, wavefunction_params), x
@@ -132,26 +133,6 @@ def eval_r(x, spine_params, rho_bg):
 init_rays_params = jax.vmap(init_ray_params)
 
 config.update("jax_enable_x64", True)
-
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "--nocdm", help="omit CDM density construction", action="store_true"
-)
-parser.add_argument(
-    "--nowdm", help="omit WDM density construction", action="store_true"
-)
-parser.add_argument(
-    "--nofdm", help="omit FDM density construction", action="store_true"
-)
-parser.add_argument("--save_coord", help="save coordinates", action="store_true")
-
-parser.add_argument("save_dir", type=str, help="Directory HDF5 will be saved to")
-parser.add_argument("prefix", type=str, help="filename prefix")
-args = parser.parse_args()
-
-cache_dir = f"{args.save_dir}/cache"
-prefix = args.prefix
-
 logging.basicConfig(
     level=logging.INFO,
     format="\x1b[33;20m%(asctime)s {}\x1b[0m: %(message)s".format(socket.gethostname()),
@@ -162,26 +143,31 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
+parser = argparse.ArgumentParser()
+parser.add_argument("yaml_file", type=str, help="Path to YAML parameter file")
+args = parser.parse_args()
+
+params = load_parameters_from_config(args.yaml_file)
+
+filename = params["general"]["output_file"]
+cache_dir = params["general"]["cache"]
 
 # Units setup
-m22 = 2.0
+m22 = params["cosmology"]["m22"]
 u = set_schroedinger_units(m22)
 
 # Box setup
-MM = 512
-L = 0.25 * h * u.from_Mpc / h
+MM = params["domain"]["N"]
+L = params["domain"]["L"] * u.from_Mpc / h
 if rank == 0:
     logger.info(f"dx = {L * u.to_Mpc/MM} Mpc")
 
-seed = 42
-K = 2**13
-z_fit = 4
+seed = params["general"]["seed"]
+K = params["eigenstate_library"]["N"]
+z_fit = params["cosmology"]["z"]
 a_fit = 1.0 / (1 + z_fit)
-beta = 0.0
-N = 8
-N_true = 1
-# Sampling of FMF only works at z=4
-assert z_fit == 4
+beta = params["background_density"]["beta"]
+N = len(params["filament_ensemble"]["orientation"])
 
 spine_gas_params = None
 cylinders = None
@@ -193,91 +179,84 @@ domain = UniformHypercube(
     [1, 1, 1],
     jnp.array([[0.0, L], [0.0, L], [0.0, L]]),
 )
-filename = f"{args.save_dir}/{args.prefix}_m_{m22:.2f}_beta_{beta:.2f}_z_{z_fit:.2f}_L_{L*u.to_Mpc:.2f}_N_{N_true}_M_{MM}.h5"
 
 if rank == 0:
-    Mmin = 3e9  # Msun h^-1
+    f = h5py.File(filename, "w")
+    f["/"].attrs.create("L_Mpc_div_h", L * h * u.to_Mpc)
+    f["/"].attrs.create("m22_1e-22eV", m22)
+    f["/"].attrs.create("N", N)
+    f["/"].attrs.create("M", MM)
+    f["/"].attrs.create("z", z_fit)
 
-    M_cylinder = sample_mass_from_powerlaw_dn_dM(N, Mmin, seed=seed)  # Msun h^-1
-    M_cylinder = jnp.array([5e9])
-    lengths = cylinder_length_physical_Mpc(M_cylinder) * u.from_Mpc / (h * a_fit)
-    r0 = h**-1 * cylinder_scale_radius_physical_Mpc(M_cylinder, beta) * u.from_Mpc
+    M_cylinder = jnp.array(params["filament_ensemble"]["mass"])
 
-    lengths = lengths[:N_true]
-    r0 = r0[:N_true]
-    M_cylinder = M_cylinder[:N_true]
-    print(M_cylinder, lengths * u.to_Mpc)
+    # print(M_cylinder, lengths * u.to_Mpc, L)
 
-    d = jnp.max(lengths)
-    r = 10 * jnp.max(r0)
+    # d = jnp.max(lengths)
+    # r = 10 * jnp.max(r0)
 
     # spine_gas_params = init_finite_straight_filament_spine_gas(
     #     N, r, d, seed + 1, domain, lengths
     # )
     # spine_gas_params = spine_gas_params[:N_true]
 
-    spine_dir = jnp.array([1.0, 0.0, 0.0])
-    spine_dir = spine_dir / np.linalg.norm(spine_dir)
+    spine_gas_params = []
+    for i in range(N):
+        length_i = jnp.array(params["filament_ensemble"]["length"]) * u.from_Mpc / h
+        spine_dir_i = jnp.array(params["filament_ensemble"]["direction"][i])
+        spine_orient_i = jnp.array(params["filament_ensemble"]["orientation"][i])
+        spine_origin_i = jnp.array(params["filament_ensemble"]["origin"][i])
+        spine_dir_i = spine_dir_i / np.linalg.norm(spine_dir_i)
+
     spine_gas_params = [
         finite_straight_filament_spine_params(
-            ray_params=init_rays_params(
-                jnp.array([0.5 * L, 0.5 * L, 0.5 * L]), spine_dir
-            ),
-            length=jnp.asarray([L]),
-            orientation=jnp.array([0.0, 1.0, 0.0]),
+            ray_params=init_rays_params(L * spine_origin_i, spine_dir_i),
+            length=length_i,
+            orientation=spine_orient_i,
         )
     ]
 
     logger.info(f"{len(spine_gas_params)} cylinder(s) placed")
 
     steady_state_density_params = []
-    f = h5py.File(filename, "w")
-    f["/"].attrs.create("L_Mpc_div_h", L * h * u.to_Mpc)
-    f["/"].attrs.create("m22_1e-22eV", m22)
-    f["/"].attrs.create("N", N_true)
-    f["/"].attrs.create("M", MM)
-    f["/"].attrs.create("z", z_fit)
-    cylinder_grps = [f.create_group(f"cylinders/{i}") for i in range(N_true)]
-
+    df_params = []
+    cylinder_grps = [f.create_group(f"cylinders/{i}") for i in range(N)]
     for i, M in enumerate(M_cylinder):
+        beta_i = params["background_density"]["beta"][i]
+        r0_i = params["background_density"]["r0"][i]
+        sigma_i = params["background_density"]["sigma"][i]
+
         steady_state_density_params.append(
             {
-                "beta": 0.0,
+                "beta": beta_i,
                 "scalefactor": a_fit,
-                "r0": h**-1
-                * cylinder_scale_radius_physical_Mpc(M, beta)
-                * u.from_Mpc,
-                "sigma2": (
-                    cylinder_sqrt_v_dispersion_physical_kms(M, beta) * u.from_kms
-                )
-                ** 2,
+                "r0": r0_i * u.from_Mpc / h,
+                "sigma2": (sigma_i * u.from_kms) ** 2,
             }
         )
         cylinder_grps[i].attrs.create("M", M)
-        cylinder_grps[i].attrs.create("beta", steady_state_density_params[-1]["beta"])
-        cylinder_grps[i].attrs.create(
-            "r0_Mpc_div_h", h * steady_state_density_params[-1]["r0"] * u.to_Mpc
-        )
-        cylinder_grps[i].attrs.create(
-            "scalefactor", steady_state_density_params[-1]["scalefactor"]
-        )
-        cylinder_grps[i].attrs.create(
-            "sigma2", steady_state_density_params[-1]["sigma2"] * u.to_kms
-        )
+        cylinder_grps[i].attrs.create("beta", beta_i)
+        cylinder_grps[i].attrs.create("r0_Mpc_div_h", r0_i)
+        cylinder_grps[i].attrs.create("scalefactor", a_fit)
+        cylinder_grps[i].attrs.create("sigma2", sigma_i**2)
         save_dict_to_group(f, f"/cylinders/{i}/", dictify(spine_gas_params[i]))
 
-    df_params = {"R_min": 0.1 * u.from_Kpc, "epochs": 5000}
+        df_params.append(
+            {
+                "R_min": params["phasespace_distribution"]["R_min"][i] * u.from_Mpc / h,
+                "epochs": params["phasespace_distribution"]["epochs"][i],
+            }
+        )
 
-    # ts = np.linspace(0, 400, 401) * u.from_Myr
-    ts = [0.0]
-    df_params = N_true * [df_params]
+    ts = N * [0.0]
 
 
 spine_gas_params = comm.bcast(spine_gas_params, root=0)
 ts = comm.bcast(ts, root=0)
 df_params = comm.bcast(df_params, root=0)
+K = comm.bcast(K, root=0)
+
 steady_state_density_params = comm.bcast(steady_state_density_params, root=0)
-N_true = len(spine_gas_params)
 if rank < len(steady_state_density_params):
     logger.info(
         f"r0={steady_state_density_params[rank]['r0'].item() * u.to_Kpc:.2f} kpc, "
@@ -285,10 +264,13 @@ if rank < len(steady_state_density_params):
         f"length={spine_gas_params[rank].length.item() * u.to_Mpc:.2f} Mpc"
     )
 
-cylinder_idx = np.array_split(np.arange(N_true), size)
-if not (args.nowdm and args.nofdm):
+cylinder_idx = np.array_split(np.arange(N), size)
+nocdm = not params["general"]["save_cdm"]
+nowdm = not params["general"]["save_wdm"]
+nofdm = not params["general"]["save_fdm"]
+if not (nowdm and nofdm):
     wavefunctions_params = [
-        init_wavefunction(steady_state_density_params[i], df_params[i], K, seed)
+        init_wavefunction(steady_state_density_params[i], df_params[i], K[i], seed)
         for i in cylinder_idx[rank]
     ]
     wavefunctions_params = [
@@ -303,8 +285,7 @@ if not (args.nowdm and args.nofdm):
                 f, f"/cylinders/{i}/wavefunction_params/", dictify(wavefunction_params)
             )
 
-
-if not args.nocdm:
+if not nocdm:
     rhos_bg = [
         SteadyStateCylinder(**steady_state_density_params[i])
         for i in cylinder_idx[rank]
@@ -339,15 +320,11 @@ filaments_in_box = {}
 translations = UniformHypercube(
     [3, 3, 3], jnp.array([[-1.5, 1.5], [-1.5, 1.5], [-1.5, 1.5]])
 )
-for idx in range(N_true):
+for idx in range(N):
     vs = []
     # for v in jnp.array(jnp.array([L, L, L]) * translations.cell_centers_cartesian):
     for v in [0]:
-        r = (
-            rhos_bg[idx].R99
-            if args.nofdm and args.nowdm
-            else wavefunctions_params[idx].R_fit
-        )
+        r = rhos_bg[idx].R99 if nofdm and nowdm else wavefunctions_params[idx].R_fit
         cylinder = pv.Cylinder(
             center=spine_gas_params[idx].ray_params.origin + v,
             direction=spine_gas_params[idx].ray_params.direction,
@@ -371,40 +348,40 @@ if rank == 0:
 f = h5py.File(filename, "r+", driver="mpio", comm=comm)
 f.atomic = False
 
-if args.save_coord:
-    if "coordinates" not in f:
-        grp = f.create_group("coordinates")
-    grp = f["coordinates"]
-    dset = create_ds(grp, "radius", (MM, MM, MM))
+# if args.save_coord:
+#     if "coordinates" not in f:
+#         grp = f.create_group("coordinates")
+#     grp = f["coordinates"]
+#     dset = create_ds(grp, "radius", (MM, MM, MM))
 
-    R_xyz = np.zeros(shape=MM_loc)
-    if len(filaments_in_box) > 0:
-        xyz = jax.lax.stop_gradient(domain.cell_centers_cartesian)
-    for idx, vs in filaments_in_box.items():
-        for v in vs:
-            filament_spine = finite_straight_filament_spine_params(
-                ray_params=init_ray_params(
-                    origin=spine_gas_params[idx].ray_params.origin + v,
-                    direction=spine_gas_params[idx].ray_params.direction,
-                ),
-                length=spine_gas_params[idx].length,
-                orientation=spine_gas_params[idx].orientation,
-            )
-            R_xyz[:] += np.asarray(eval_r(xyz, filament_spine, None)).reshape(
-                R_xyz.shape
-            )
-            logging.info(
-                f"Pencil {ij} constructed R for cylinder {idx} from {v/jnp.array([L,L,L])}"
-            )
+#     R_xyz = np.zeros(shape=MM_loc)
+#     if len(filaments_in_box) > 0:
+#         xyz = jax.lax.stop_gradient(domain.cell_centers_cartesian)
+#     for idx, vs in filaments_in_box.items():
+#         for v in vs:
+#             filament_spine = finite_straight_filament_spine_params(
+#                 ray_params=init_ray_params(
+#                     origin=spine_gas_params[idx].ray_params.origin + v,
+#                     direction=spine_gas_params[idx].ray_params.direction,
+#                 ),
+#                 length=spine_gas_params[idx].length,
+#                 orientation=spine_gas_params[idx].orientation,
+#             )
+#             R_xyz[:] += np.asarray(eval_r(xyz, filament_spine, None)).reshape(
+#                 R_xyz.shape
+#             )
+#             logging.info(
+#                 f"Pencil {ij} constructed R for cylinder {idx} from {v/jnp.array([L,L,L])}"
+#             )
 
-    with dset.collective:
-        dset[
-            :,
-            ij[0] * MM_loc[1] : (ij[0] + 1) * MM_loc[1],
-            ij[1] * MM_loc[2] : (ij[1] + 1) * MM_loc[2],
-        ] = R_xyz
+#     with dset.collective:
+#         dset[
+#             :,
+#             ij[0] * MM_loc[1] : (ij[0] + 1) * MM_loc[1],
+#             ij[1] * MM_loc[2] : (ij[1] + 1) * MM_loc[2],
+#         ] = R_xyz
 
-    logging.info(f"Pencil {ij} saved WDM rho")
+#     logging.info(f"Pencil {ij} saved WDM rho")
 
 for i, t in enumerate(ts):
     comm.Barrier()
@@ -413,7 +390,7 @@ for i, t in enumerate(ts):
     if len(filaments_in_box) > 0:
         xyz = jax.lax.stop_gradient(domain.cell_centers_cartesian)
 
-    if not args.nofdm:
+    if not nofdm:
         if rank == 0:
             logging.info(f"Construct density at t={t * u.to_Myr}")
         if i == 0:
@@ -448,7 +425,7 @@ for i, t in enumerate(ts):
             ] = rho_xyz
         logging.info(f"Pencil {ij} saved FDM rho")
 
-if not args.nowdm:
+if not nowdm:
     if "density" not in f:
         grp = f.create_group("density")
     grp = f["density"]
@@ -484,21 +461,16 @@ if not args.nowdm:
 
     logging.info(f"Pencil {ij} saved WDM rho")
 
-if not args.nocdm:
+if not nocdm:
     if "density" not in f:
         grp = f.create_group("density")
     grp = f["density"]
     dset = create_ds(grp, "cdm", (MM, MM, MM))
-    logger.info(vs)
 
     if len(filaments_in_box) > 0:
         rho_xyz[:] = 0.0
     for idx, vs in filaments_in_box.items():
-        R_cut = (
-            rhos_bg[idx].R99
-            if args.nofdm and args.nowdm
-            else wavefunctions_params[idx].R_fit
-        )
+        R_cut = rhos_bg[idx].R99 if nofdm and nowdm else wavefunctions_params[idx].R_fit
         for v in vs:
             filament_spine = finite_straight_filament_spine_params(
                 ray_params=init_ray_params(

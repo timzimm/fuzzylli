@@ -8,8 +8,7 @@ black box.
 
 
 def cylinder_length_physical_Mpc(Msun):
-    loga, b = -10.41712413, 0.34399827
-    loga, b = -6.38615268, 0.21784641
+    loga, b = -7.63270221, 0.27634879
     return jnp.exp(loga) * Msun**b
 
 
@@ -20,26 +19,25 @@ def cylinder_scale_radius_physical_Mpc(Msun, beta):
     of the cylinder is contained.
     """
     # loga, b = -11.91067261, 0.33317267
-    loga, b = -12.02585532, 0.33718792
+    loga, b = -12.00153483, 0.33619234
     mass_fraction = 0.9
     return (1.0 / mass_fraction - 1) ** (1 / (2 - beta)) * jnp.exp(loga) * Msun**b
 
 
 def cylinder_sqrt_v_dispersion_physical_kms(Msun, beta):
     # loga, b = -4.77023028, 0.32800087
-    loga, b = -6.78571601, 0.39107679
+    loga, b = -6.16244123, 0.3618256
     return jnp.sqrt(2.0 / (2 - beta)) * jnp.exp(loga) * Msun**b
 
 
 def cylinder_line_mass_physical_Msun_Mpc(Msun):
     # loga, b = 10.2652066, 0.66325106
-    loga, b = 6.38615269, 0.78215359
+    loga, b = 7.63270222, 0.72365121
     return jnp.exp(loga) * Msun**b
 
 
 def cylinder_dndM_Msun_inv_Msun_Mpc3(Msun):
-    # loga, b = 15.96909906, -1.76285939
-    loga, b = 26.35112415, -2.19942357
+    loga, b = 26.19080834, -2.19428402
     return jnp.exp(loga) * Msun**b
 
 
@@ -49,7 +47,7 @@ def sample_mass_from_powerlaw_dn_dM(N, Mmin, seed=42):
     for M>2e9 Msun
     """
     # b = 1.76285939
-    b = -2.19942357
+    b = -2.19428402
 
     u = jax.random.uniform(jax.random.PRNGKey(seed), shape=(N,))
     return Mmin * (1 - u) ** (1 / b)
