@@ -1,6 +1,7 @@
 import hashlib
 import logging
 from collections import namedtuple
+import matplotlib.pyplot as plt
 
 import numpy as np
 import jax
@@ -81,13 +82,14 @@ def data_generation_gaussian_noise(rho_target, R_fit, N_fit, key, sigma):
     return R, log_rho_R_noisy
 
 
-def data_generation_poisson_process(rho_target, M, R_fit, key):
+def data_generation_poisson_process(rho_target, R_fit, M, key):
     """
     UNUSED.
     """
     # Simulate non-homogenous Poisson process (per unit length)
-    N_samples = random.poisson(key, rho_target.total_mass / M)
-    R_samples = rho_target.sample(N_samples)
+    N_samples = random.poisson(key, rho_target.enclosed_mass(R_fit) / M)
+    logger.info(f"Simulate NHPP with N={N_samples} points")
+    R_samples = rho_target.sample(N_samples, highR=R_fit)
     return R_samples
 
 
@@ -111,9 +113,15 @@ def truncated_spline(R, R_cut, spline_params):
 evaluate_multiple_truncated_splines = vmap(truncated_spline, in_axes=(None, None, 0))
 
 
-def spiral_on_weighted_l1(
+def while_loop(cond_fun, body_fun, init_val):
+    val = init_val
+    while cond_fun(val):
+        val = body_fun(val)
+    return val
+
+
+def spiral_tap(
     mod_poisson_log_likelihood,
-    prior_weights,
     tau,
     f0,
     eta=1.1,
@@ -122,32 +130,27 @@ def spiral_on_weighted_l1(
     err=1e-4,
 ):
     """
-    UNUSED.
-    Optimizer for the reconstruction of sparse intensity function for non-homogenous
-    Poisson process
+    Optimizer for the reconstruction of a non-homogenous Poisson process
+    intensity function.
+    See arXiv:1005.4274 for more information
     """
 
     def total_objective(f):
-        return mod_poisson_log_likelihood(f) + tau * jnp.sum(jnp.abs(prior_weights * f))
+        return mod_poisson_log_likelihood(f) + tau * jnp.sum(jnp.abs(f))
 
     grad_log_likelihood = jax.grad(mod_poisson_log_likelihood)
     hessian_log_likelihood = jax.hessian(mod_poisson_log_likelihood)
 
     def not_converged(state):
-        f_kp1, f_k, k = state
-        return jnp.logical_and(jnp.linalg.norm(f_kp1 - f_k) > err, k < maxiter)
-        return jnp.logical_and(
-            jnp.linalg.norm(f_kp1 - f_k) / jnp.linalg.norm(f_k) > err, k < maxiter
-        )
+        f_kp1, f_k, err_k, k = state
+        return jnp.logical_and(err_k > err, k < maxiter)
 
     def find_solution_of_quadratic_approximation(state):
         def find_next_step_size(state):
             f_kp1, alpha_k = state
             alpha_k = eta * alpha_k
             f_kp1 = jax.nn.relu(
-                f_k
-                - 1.0 / alpha_k * grad_log_likelihood_k
-                - tau / alpha_k * prior_weights
+                f_k - 1.0 / alpha_k * grad_log_likelihood_k - tau / alpha_k
             )
             return f_kp1, alpha_k
 
@@ -158,30 +161,37 @@ def spiral_on_weighted_l1(
                 f_kp1
             ) > total_objective_k - sigma * alpha_k / 2 * jnp.sum((f_kp1 - f_k) ** 2)
 
-        f_k, f_km1, k = state
+        f_k, f_km1, _, k = state
         delta_k = f_k - f_km1
         grad_log_likelihood_k = grad_log_likelihood(f_k)
         total_objective_k = total_objective(f_k)
         # Assuming the log_likelihood is convex, we have only positive EV and
         # the rayleigh quotient is thus postive as well.
-        alpha_k = (
-            delta_k.T
-            @ hessian_log_likelihood(f_k)
-            @ delta_k
-            / jnp.dot(delta_k, delta_k)
+        alpha_k = jnp.max(
+            jnp.array(
+                [
+                    delta_k.T
+                    @ hessian_log_likelihood(f_k)
+                    @ delta_k
+                    / jnp.dot(delta_k, delta_k),
+                    10 * jnp.finfo(jnp.float64).eps,
+                ]
+            )
         )
-        f_kp1 = jax.nn.relu(
-            f_k - 1.0 / alpha_k * grad_log_likelihood_k - tau / alpha_k * prior_weights
-        )
-        f_kp1, alpha_kp1 = jax.lax.while_loop(
+        f_kp1 = jax.nn.relu(f_k - 1.0 / alpha_k * grad_log_likelihood_k - tau / alpha_k)
+
+        f_kp1, alpha_k = jax.lax.while_loop(
             not_accept_step, find_next_step_size, (f_kp1, alpha_k)
         )
-        return f_kp1, f_k, k + 1
+        # This is the same error metric that JaxOpt's ProximalGradient uses:
+        # https://github.com/google/jaxopt/blob/main/jaxopt/_src/proximal_gradient.py#L204
+        err_k = jnp.linalg.norm(f_kp1 - f_k) * alpha_k
+        return f_kp1, f_k, err_k, k + 1
 
     return jax.lax.while_loop(
         not_converged,
         find_solution_of_quadratic_approximation,
-        (f0, f0 + err * jnp.linalg.norm(f0), 1),
+        (f0, f0 + err * jnp.linalg.norm(f0), 1.0, 0),
     )
 
 
@@ -190,18 +200,34 @@ def init_wavefunction_params_poisson_process(
     rho_target,
     df,
     R_fit,
+    mu_cdm,
     seed,
 ):
-    """
-    UNUSED
-    """
+    fig, ax = plt.subplots()
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    rho_psi = jax.vmap(rho, in_axes=(0, None))
+    r = np.logspace(jnp.log10(R_fit) - 3, jnp.log10(R_fit), 100)
+    ax.plot(r, rho_target(r))
+
+    M = mu_cdm
+    bin_count = 128
     total_mass = rho_target.total_mass
+
     seed_sampling, seed_phase = random.split(random.PRNGKey(seed), 2)
 
-    M = 1.0
-    R_samples = data_generation_poisson_process(rho_target, M, R_fit, seed_sampling)
-    N_samples = R_samples.shape[0]
-    logger.info(f"Simulate NHPP with N={N_samples} points")
+    R_samples = data_generation_poisson_process(rho_target, R_fit, M, seed_sampling)
+    y, e = jnp.histogram(R_samples, bins=bin_count)
+    # logbins = (jnp.roll(loge, -1) + loge)[:-1] / 2.0
+    bins = 0.5 * (e[:-1] + e[1:])
+    # e = jnp.exp(loge)
+    # rho_sample = mu_cdm * y / (2 * jnp.pi * bins**2 * (loge[1] - loge[0]))
+    # ax.plot(bins, rho_sample, drawstyle="steps-mid")
+    ax.plot(bins, y, drawstyle="steps-mid")
+    glx, glw = np.polynomial.legendre.leggauss(16)
+    glx = jnp.asarray(0.5 * (glx + 1))
+    glw = jnp.asarray(0.5 * glw)
+    R_i = (e[:-1, jnp.newaxis] + jnp.diff(e)[:, jnp.newaxis] * glx).ravel()
 
     prior_lambda_j = (
         total_mass
@@ -214,59 +240,79 @@ def init_wavefunction_params_poisson_process(
     )
     prefactor = jnp.where(eigenstate_library.l_of_j > 0, 2.0, 1.0)
     R_j2_R = (
-        prefactor[jnp.newaxis, :]
+        R_i[:, jnp.newaxis]
+        * eval_mult_splines_mult_x(R_i, eigenstate_library.R_j_params) ** 2
+    ).reshape(bin_count, glx.shape[0], -1)
+
+    # This matrix maps eigenstate coefficients to the expected number of
+    # fiducial line mass particles within bins R_i
+    A = (
+        jnp.diff(e)[:, jnp.newaxis]
+        * jnp.tensordot(R_j2_R, glw, axes=(1, 0))
+        * prefactor
         * total_mass
-        / (2 * jnp.pi)
-        * R_samples[:, jnp.newaxis]  # Jacobian
-        * eval_mult_splines_mult_x(R_samples, eigenstate_library.R_j_params) ** 2
-    ) / prior_lambda_j
+        / prior_lambda_j
+        / mu_cdm
+    )
 
     def neg_log_likelihood(aj_2):
-        return total_mass * jnp.sum(prefactor * aj_2 / prior_lambda_j) - jnp.sum(
-            jnp.log(R_j2_R @ aj_2 + 1e-10)
-        )
+        Af = A @ aj_2
+        return jnp.sum(Af) - jnp.sum(y * jnp.log(Af + 1e-12))
 
     global_lambda = 1.0
-    res, _, iter_num = spiral_on_weighted_l1(
-        neg_log_likelihood,
-        jnp.ones_like(prior_lambda_j),
-        global_lambda,
-        jnp.ones_like(prior_lambda_j),
-        maxiter=10000,
-    )
-
-    logger.info(f"Spiral stopped after {iter_num} ")
-    aj_2 = res / prior_lambda_j
-
-    non_zero_modes_j = jnp.nonzero(aj_2)
-    aj_2 = aj_2[non_zero_modes_j]
-    reduced_library = tree_map(
-        lambda coefs: coefs[non_zero_modes_j], eigenstate_library
-    )
-    # Each nl gets a random phase but modes with same l alwazs have the same
-    # |a_nl|
-    phase_j = jnp.where(
-        (reduced_library.l_of_j > 0).reshape(-1, 1),
-        jnp.exp(
-            1.0j
-            * random.uniform(
-                seed_phase,
-                shape=(reduced_library.J, 2),
-                maxval=2 * jnp.pi,
-            )
-        ),
-        1.0 / 2,
-    )
     logger.info(
-        f"{non_zero_modes_j[0].shape[0]}/{eigenstate_library.J} modes have non-vanishing coefficents"
+        f"Initial -logL = {neg_log_likelihood(jnp.ones_like(prior_lambda_j)):.3f} "
     )
-    return wavefunction_params(
-        total_mass=total_mass,
-        eigenstate_library=reduced_library,
-        R_fit=R_fit,
-        a_j=jnp.sqrt(aj_2),
-        phase_j=phase_j,
-    )
+
+    for i in [140000]:
+        res, _, error, iter_num = spiral_tap(
+            neg_log_likelihood,
+            global_lambda,
+            jnp.ones_like(prior_lambda_j),
+            maxiter=i,
+        )
+        aj_2 = res / prior_lambda_j
+
+        logger.info(
+            f"Spiral stopped after {iter_num}, "
+            f"-logL = {neg_log_likelihood(res):.3f}, "
+            f"error = {error:.1e}"
+        )
+
+        non_zero_modes_j = jnp.nonzero(aj_2)
+        aj_2 = aj_2[non_zero_modes_j]
+        reduced_library = tree_map(
+            lambda coefs: coefs[non_zero_modes_j], eigenstate_library
+        )
+        # Each nl gets a random phase but modes with same l alwazs have the same
+        # |a_nl|
+        phase_j = jnp.where(
+            (reduced_library.l_of_j > 0).reshape(-1, 1),
+            jnp.exp(
+                1.0j
+                * random.uniform(
+                    seed_phase,
+                    shape=(reduced_library.J, 2),
+                    maxval=2 * jnp.pi,
+                )
+            ),
+            1.0 / 2,
+        )
+        logger.info(
+            f"{non_zero_modes_j[0].shape[0]}/{eigenstate_library.J} modes "
+            f"have non-vanishing coefficents"
+        )
+        params = wavefunction_params(
+            total_mass=total_mass,
+            eigenstate_library=reduced_library,
+            R_fit=R_fit,
+            a_j=jnp.sqrt(aj_2),
+            phase_j=phase_j,
+        )
+        ax.plot(r, rho_psi(r, params).ravel(), label=f"{iter_num}")
+        ax.set_ylim([1e-2, 100000])
+    ax.legend(*ax.get_legend_handles_labels(), loc="lower left")
+    plt.show()
 
 
 def init_wavefunction_params_least_square_naive(
@@ -383,6 +429,12 @@ def init_wavefunction_params_least_square(
     Initializes the wave function coefficients via an adaptive LASSO reggression
     fit. The posterior mode is found via proximal gradient descent.
     """
+
+    @jit
+    def neg_log_likelihood(aj_2):
+        log_rho_psi = jnp.log(R_j2_R @ aj_2)
+        return jnp.sum((log_rho_psi - log_rho_R_noisy) ** 2)
+
     # TODO: Move this somewhere else
     # Creates system matrix. Observations along axis 0 and states j along axis 1
     # These parameters have to be fixed artificially under gaussian noise
@@ -403,80 +455,78 @@ def init_wavefunction_params_least_square(
     # taken out of the argmin and thus transferred to the prior term
     global_lambda = 2 * sigma**2
 
-    # WKB asymptote as scale of the exponential prior. Postivity of all
-    # coefficients (prior support) is enforced by the proximal operator.
-    prior_lambda_j = (
-        total_mass
-        * (2 * jnp.pi) ** -2
-        * df(
-            eigenstate_library.E_j,
-            L(eigenstate_library.l_of_j),
-        )
-        ** (-1)
-    )
-
-    # System matrix. Note that the eigenstate library only contains R_j modes for
-    # l>=0 since the Hamiltoniain is invariant under l -> -l. Since we assume
-    # |a_nl| = |a_n-l| we get un overall factor of 2 for l>0 modes which we
-    # account for in the system matrix
-    prefactor = jnp.where(eigenstate_library.l_of_j > 0, 2.0, 1.0)
-    R_j2_R = (
-        prefactor[jnp.newaxis, :]
-        * total_mass
-        / (2 * jnp.pi)
-        * eval_mult_splines_mult_x(R, eigenstate_library.R_j_params) ** 2
-    )
-
-    @jit
-    def neg_log_likelihood(aj_2):
-        log_rho_psi = jnp.log(R_j2_R @ aj_2)
-        return jnp.sum((log_rho_psi - log_rho_R_noisy) ** 2)
-
-    logger.info("Running l1-regularized optimization...")
-    R_j2_R = R_j2_R / prior_lambda_j
-
+    active_library = eigenstate_library
+    epsilon = 1
+    N = 1
     solver = ProximalGradient(
         fun=neg_log_likelihood,
         prox=prox_non_negative_lasso,
-        maxiter=100000,
+        maxiter=10000,
         tol=1e-4,
         acceleration=True,
     )
-    res = solver.run(
-        1.0 * jnp.ones_like(prior_lambda_j), hyperparams_prox=global_lambda
-    )
-    aj_2 = res.params / prior_lambda_j
+    logger.info("Running l1-regularized optimization...")
+    aj_2 = 1.0 * jnp.ones_like(active_library.E_j)
+    while epsilon > 1e-4:
+        # WKB asymptote as scale of the exponential prior. Postivity of all
+        # coefficients (prior support) is enforced by the proximal operator.
+        prior_lambda_j = (
+            total_mass
+            * (2 * jnp.pi) ** -2
+            * df(active_library.E_j, L(active_library.l_of_j)) ** (-1)
+        )
 
-    logger.info(
-        f"Optimization stopped after {res.state.iter_num} "
-        f"iterations (error = {res.state.error:.5f})"
-    )
-    non_zero_modes_j = jnp.nonzero(aj_2)
-    aj_2 = aj_2[non_zero_modes_j]
-    reduced_library = tree_map(
-        lambda coefs: coefs[non_zero_modes_j], eigenstate_library
-    )
+        # System matrix. Note that the eigenstate library only contains R_j modes for
+        # l>=0 since the Hamiltoniain is invariant under l -> -l. Since we assume
+        # |a_nl| = |a_n-l| we get un overall factor of 2 for l>0 modes which we
+        # account for in the system matrix
+        prefactor = jnp.where(active_library.l_of_j > 0, 2.0, 1.0)
+        R_j2_R = (
+            prefactor[jnp.newaxis, :]
+            * total_mass
+            / (2 * jnp.pi)
+            * eval_mult_splines_mult_x(R, active_library.R_j_params) ** 2
+        )
+
+        R_j2_R = R_j2_R / prior_lambda_j
+
+        res = solver.run(aj_2, hyperparams_prox=global_lambda)
+        aj_2 = res.params
+        non_zero_modes_j = jnp.nonzero(aj_2)
+
+        epsilon = res.state.error
+        N += 1
+        aj_2 = aj_2[non_zero_modes_j]
+        active_library = tree_map(lambda coefs: coefs[non_zero_modes_j], active_library)
+        logger.info(
+            f"Super iteration {N} stopped after {res.state.iter_num} iterations "
+            f"(error = {res.state.error:.5f}, active set = {active_library.J})"
+        )
+        if N == 100:
+            break
+
+    aj_2 = aj_2 / prior_lambda_j[non_zero_modes_j]
     # Each nl gets a random phase but modes with same l always have the same
     # |a_nl|. We divide the l=0 mode to allow for more straightforward
     # computation in rho(...) below
     phase_j = jnp.where(
-        (reduced_library.l_of_j > 0).reshape(-1, 1),
+        (active_library.l_of_j > 0).reshape(-1, 1),
         jnp.exp(
             1.0j
             * random.uniform(
                 seed_phase,
-                shape=(reduced_library.J, 2),
+                shape=(active_library.J, 2),
                 maxval=2 * jnp.pi,
             )
         ),
         1.0 / 2,
     )
     logger.info(
-        f"{non_zero_modes_j[0].shape[0]}/{eigenstate_library.J} modes have non-vanishing coefficents"
+        f"{active_library.J}/{eigenstate_library.J} modes have non-vanishing coefficents"
     )
     return wavefunction_params(
         total_mass=total_mass,
-        eigenstate_library=reduced_library,
+        eigenstate_library=active_library,
         R_fit=R_fit,
         a_j=jnp.sqrt(aj_2),
         phase_j=phase_j,
