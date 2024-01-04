@@ -166,6 +166,6 @@ def generic_finite_cylinder_density(
     #     jnp.inf,  # Push point to infinity if incident point is outside of cylinder
     # ).squeeze()
 
-    return hard_cylinder_cutoff_along_z(
+    return soft_cylinder_cutoff_along_z(
         eval_density(R, phi, density_params), norm_z, length
     )
