@@ -149,7 +149,13 @@ class SteadyStateCylinder(RadialDensity):
     def total_mass(self):
         return 4 * jnp.pi * self.scalefactor * self.sigma2 * (2 - self.beta)
 
-    def sample(self, N):
+    def sample(self, N, lowR=None, highR=None):
+        lowu = 0
+        highu = 1.0
+        if lowR is not None:
+            lowu = self.enclosed_mass(lowR) / self.total_mass
+        if highR is not None:
+            highu = self.enclosed_mass(highR) / self.total_mass
         self.seed, sample_seed = split(self.seed)
-        mu = uniform(sample_seed, shape=(N,), maxval=1.0)
+        mu = uniform(sample_seed, shape=(N,), minval=lowu, maxval=highu)
         return (mu / (1 - mu)) ** (1.0 / (2 - self.beta)) * self.r0 / self.scalefactor
