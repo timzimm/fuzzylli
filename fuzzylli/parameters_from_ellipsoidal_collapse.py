@@ -44,7 +44,7 @@ def cylinder_dndM_Msun_inv_Msun_Mpc3(Msun):
 def sample_mass_from_powerlaw_dn_dM(N, Mmin, seed=42):
     """
     Inverse transform sampling from power law fit to full filament mass function
-    for M>2e9 Msun
+    for M>3e9 Msun
     """
     # b = 1.76285939
     b = -2.19428402
