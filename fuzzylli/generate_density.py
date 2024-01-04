@@ -38,7 +38,7 @@ from fuzzylli.cosmology import h
 from fuzzylli.df import ConstantAnisotropyDistribution
 
 
-def init_wavefunction(params_rho, df_args, N, seed):
+def init_wavefunction(params_rho, df_args, N, seed, load_if_cached):
     """
     Bulk init of all componenets leading to wavfunction fit, including
     wavefunction itself.
@@ -51,7 +51,7 @@ def init_wavefunction(params_rho, df_args, N, seed):
         "for_compute": [a_fit, V, rho.R99, N],
     }
     eigenstate_lib = load_or_compute_model(
-        True,
+        load_if_cached,
         cache_dir,
         eigenstate_library.compute_name,
         init_eigenstate_library,
@@ -71,7 +71,7 @@ def init_wavefunction(params_rho, df_args, N, seed):
     }
 
     wavefunction_params = load_or_compute_model(
-        True,
+        load_if_cached,
         cache_dir,
         psi.wavefunction_params.compute_name,
         psi.init_wavefunction_params_least_square,
@@ -151,6 +151,7 @@ params = load_parameters_from_config(args.yaml_file)
 
 filename = params["general"]["output_file"]
 cache_dir = params["general"]["cache"]
+load_if_cached = params["general"]["load_if_cached"]
 
 # Units setup
 m22 = params["cosmology"]["m22"]
@@ -190,31 +191,21 @@ if rank == 0:
 
     M_cylinder = jnp.array(params["filament_ensemble"]["mass"])
 
-    # print(M_cylinder, lengths * u.to_Mpc, L)
-
-    # d = jnp.max(lengths)
-    # r = 10 * jnp.max(r0)
-
-    # spine_gas_params = init_finite_straight_filament_spine_gas(
-    #     N, r, d, seed + 1, domain, lengths
-    # )
-    # spine_gas_params = spine_gas_params[:N_true]
-
     spine_gas_params = []
     for i in range(N):
-        length_i = jnp.array(params["filament_ensemble"]["length"]) * u.from_Mpc / h
+        length_i = jnp.array(params["filament_ensemble"]["length"][i]) * u.from_Mpc / h
         spine_dir_i = jnp.array(params["filament_ensemble"]["direction"][i])
         spine_orient_i = jnp.array(params["filament_ensemble"]["orientation"][i])
         spine_origin_i = jnp.array(params["filament_ensemble"]["origin"][i])
         spine_dir_i = spine_dir_i / np.linalg.norm(spine_dir_i)
 
-    spine_gas_params = [
-        finite_straight_filament_spine_params(
-            ray_params=init_rays_params(L * spine_origin_i, spine_dir_i),
-            length=length_i,
-            orientation=spine_orient_i,
+        spine_gas_params.append(
+            finite_straight_filament_spine_params(
+                ray_params=init_rays_params(L * spine_origin_i, spine_dir_i),
+                length=length_i,
+                orientation=spine_orient_i,
+            )
         )
-    ]
 
     logger.info(f"{len(spine_gas_params)} cylinder(s) placed")
 
@@ -248,7 +239,7 @@ if rank == 0:
             }
         )
 
-    ts = N * [0.0]
+    ts = [0.0]
 
 
 spine_gas_params = comm.bcast(spine_gas_params, root=0)
@@ -270,7 +261,9 @@ nowdm = not params["general"]["save_wdm"]
 nofdm = not params["general"]["save_fdm"]
 if not (nowdm and nofdm):
     wavefunctions_params = [
-        init_wavefunction(steady_state_density_params[i], df_params[i], K[i], seed)
+        init_wavefunction(
+            steady_state_density_params[i], df_params[i], K[i], seed, load_if_cached
+        )
         for i in cylinder_idx[rank]
     ]
     wavefunctions_params = [
@@ -322,8 +315,8 @@ translations = UniformHypercube(
 )
 for idx in range(N):
     vs = []
-    # for v in jnp.array(jnp.array([L, L, L]) * translations.cell_centers_cartesian):
-    for v in [0]:
+    for v in jnp.array(jnp.array([L, L, L]) * translations.cell_centers_cartesian):
+        # for v in [0]:
         r = rhos_bg[idx].R99 if nofdm and nowdm else wavefunctions_params[idx].R_fit
         cylinder = pv.Cylinder(
             center=spine_gas_params[idx].ray_params.origin + v,
