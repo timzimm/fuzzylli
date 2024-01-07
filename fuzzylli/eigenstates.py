@@ -6,11 +6,13 @@ import numpy as np
 import jax.numpy as jnp
 from jax import vmap
 from scipy.linalg import eigh_tridiagonal
+from jaxopt import Broyden, Bisection
 
 from fuzzylli.domain import UniformHypercube
 from fuzzylli.interpolation_jax import init_1d_interpolation_params
 from fuzzylli.potential import E_c
 from fuzzylli.wavefunction import L
+from fuzzylli.utils import quad
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -43,11 +45,58 @@ class eigenstate_library(_eigenstate_library):
         )
 
 
+def wkb_estimate_of_R(V, Emax, l, scalefactor):
+    def barrier(R):
+        return (l**2 - 1.0 / 4) / (2 * scalefactor**2 * (1e-10 + R**2))
+
+    def R_classical_Veff(R):
+        return V(R) + barrier(R) - Emax
+
+    def R_classical_V(R):
+        return V(R) - Emax
+
+    def wkb_condition_Veff(R_lower, R_upper):
+        return (
+            jnp.sqrt(2)
+            * scalefactor
+            * quad(lambda R: jnp.sqrt(R_classical_Veff(R)), R_lower, R_upper)
+            - 18
+        )
+
+    # Determine classically allowed region (ignoring barrier)
+    broyden = Broyden(fun=R_classical_V)
+    Rmax = 1.05 * broyden.run(jnp.array(1.0)).params
+    Rmin = 0.95 * jnp.nan_to_num(
+        jnp.sqrt((l**2 - 1.0 / 4) / (2 * scalefactor**2 * Emax))
+    )
+
+    # Determine radius according to WKB decay in forbidden region
+    bisec = Bisection(
+        optimality_fun=lambda R: wkb_condition_Veff(Rmax, R),
+        lower=Rmax,
+        upper=10 * Rmax,
+    )
+    Rmax = bisec.run().params
+    if wkb_condition_Veff(0, Rmin) > 0:
+        bisec = Bisection(
+            optimality_fun=lambda R: wkb_condition_Veff(R, Rmin),
+            lower=0,
+            upper=Rmin,
+        )
+        Rmin = bisec.run(Rmin).params
+    else:
+        Rmin = jnp.finfo(float).eps ** (2 / (2 * l + 1)) * Rmin
+
+    return Rmin, Rmax
+
+
 def init_eigenstate_library(scalefactor, V, R, N):
     """
     Compute the eigenstate Library for axialsymmetric potential V.
 
     """
+
+    init_mult_spline_params = vmap(init_1d_interpolation_params, in_axes=(0, 0, 0))
 
     def E_min(L):
         """
@@ -57,10 +106,6 @@ def init_eigenstate_library(scalefactor, V, R, N):
         epsilon = 10 * jnp.finfo(jnp.float64).eps
         return (1 + epsilon) * E_c(L, V, scalefactor)
 
-    H_domain = UniformHypercube([N], np.array([0, 2 * R]))
-    logger.info(f"Hamiltonian domain = {H_domain.extends}")
-    r = H_domain.cell_interfaces[0]
-
     # Discetized radial eigenstate
     R_j_R = []
     # Eigenvalues
@@ -69,9 +114,17 @@ def init_eigenstate_library(scalefactor, V, R, N):
     l_of_j = []
     n_of_j = []
 
+    R_0 = []
+    dr = []
+
     ll = 0
     E_max = V(R)
     while True:
+        R_min, R_max = wkb_estimate_of_R(V, E_max, ll, scalefactor)
+        H_domain = UniformHypercube([N], np.array([R_min, R_max]))
+        logger.info(f"Hamiltonian domain = {H_domain.extends}")
+        r = H_domain.cell_interfaces[0]
+
         H_diag, H_off_diag = construct_cylindrical_hamiltonian(r, ll, scalefactor, V)
         E_min_ll = E_min(L(ll))
 
@@ -106,18 +159,19 @@ def init_eigenstate_library(scalefactor, V, R, N):
         E_j.append(jnp.asarray(E_n))
         l_of_j.append(ll * jnp.ones_like(E_n))
         n_of_j.append(jnp.arange(E_n.shape[0]))
+        R_0.append(jnp.repeat(r[0], E_j[-1].shape[0]))
+        dr.append(jnp.repeat(r[1] - r[0], E_j[-1].shape[0]))
         logger.info(f"{E_j[-1].shape[0]} eigenfunctions found")
 
         ll += 1
 
-    init_mult_spline_params = vmap(
-        init_1d_interpolation_params, in_axes=(None, None, 0)
-    )
     R_j_R = jnp.concatenate(R_j_R)
     E_j = jnp.concatenate(E_j)
     l_of_j = jnp.concatenate(l_of_j)
     n_of_j = jnp.concatenate(n_of_j)
-    R_j_params = init_mult_spline_params(r[0], r[1] - r[0], R_j_R)
+    R_0 = jnp.concatenate(R_0)
+    dr = jnp.concatenate(dr)
+    R_j_params = init_mult_spline_params(R_0, dr, R_j_R)
 
     return eigenstate_library(
         R_j_params=R_j_params,

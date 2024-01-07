@@ -30,9 +30,8 @@ def R_g(L, V, scalefactor):
     """
     Guiding radius of circular orbit
     """
-    V_eff_L_V_a = lambda R: V_eff(R, L, V, scalefactor)
     solver = Bisection(
-        optimality_fun=jit(grad(V_eff_L_V_a)),
+        optimality_fun=jit(grad(lambda R: V_eff(R, L, V, scalefactor))),
         lower=jnp.finfo(float).eps,
         upper=V.R_max,
         check_bracket=False,
@@ -41,21 +40,10 @@ def R_g(L, V, scalefactor):
     def compute_R_via_bisection(L):
         return solver.run(V.R_min).params
 
-    def compute_R_asymptotically(L):
-        return L / jnp.sqrt(V.X)
-
-    def compute_R(L):
-        return cond(
-            L < 100,
-            compute_R_via_bisection,
-            compute_R_asymptotically,
-            L + 10 * jnp.finfo(float).eps,
-        )
-
     return cond(
         L == 0.0,
         lambda _: 0.0,
-        compute_R,
+        compute_R_via_bisection,
         L + 10 * jnp.finfo(float).eps,
     )
 

@@ -38,6 +38,24 @@ class RadialDensity(ABC):
         return self._total_mass
 
     @property
+    def R90(self):
+        """
+        Radius enclosing 90% of total mass
+        """
+        if not hasattr(self, "_R90"):
+            self._R90 = self.enclosing_radius(0.90)
+        return self._R90
+
+    @property
+    def R95(self):
+        """
+        Radius enclosing 95% of total mass
+        """
+        if not hasattr(self, "_R95"):
+            self._R95 = self.enclosing_radius(0.95)
+        return self._R95
+
+    @property
     def R99(self):
         """
         Radius enclosing 99% of total mass
