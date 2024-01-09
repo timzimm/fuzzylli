@@ -1,25 +1,33 @@
 import hashlib
 import logging
 from collections import namedtuple
+from functools import partial
 
 import numpy as np
 import jax.numpy as jnp
-from jax import vmap
-from scipy.linalg import eigh_tridiagonal
+from scipy.linalg import toeplitz
+from jax import vmap, grad
+from scipy.linalg import eig, eigh_tridiagonal
 from jaxopt import Broyden, Bisection
 
 from fuzzylli.domain import UniformHypercube
-from fuzzylli.interpolation_jax import init_1d_interpolation_params
+from fuzzylli.interpolation_jax import init_1d_interpolation_params, eval_interp1d
 from fuzzylli.potential import E_c
 from fuzzylli.wavefunction import L
 from fuzzylli.utils import quad
+from fuzzylli.special import lambertw
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+_R_j_params = namedtuple("_R_j_params", ["R_k", "X_min", "X_max", "a", "b"])
+
 _eigenstate_library = namedtuple(
     "eigenstate_library", ["R_j_params", "E_j", "l_of_j", "n_of_j"]
 )
+
+a = 1.0
+b = 0.0
 
 
 class eigenstate_library(_eigenstate_library):
@@ -37,7 +45,7 @@ class eigenstate_library(_eigenstate_library):
     def compute_name(cls, scalefactor, V, R, N):
         H_domain = UniformHypercube([N], np.array([0, 2 * R]))
         r = H_domain.cell_interfaces[0]
-        H_diag, H_off_diag = construct_cylindrical_hamiltonian(r, 0, scalefactor, V)
+        H_diag, H_off_diag = construct_tridiagonal_hamiltonian(r, 0, scalefactor, V)
         return hashlib.md5(
             H_diag.tobytes()
             + np.array([scalefactor]).tobytes()
@@ -60,7 +68,7 @@ def wkb_estimate_of_R(V, Emax, l, scalefactor):
             jnp.sqrt(2)
             * scalefactor
             * quad(lambda R: jnp.sqrt(R_classical_Veff(R)), R_lower, R_upper)
-            - 18
+            - 36
         )
 
     # Determine classically allowed region (ignoring barrier)
@@ -86,8 +94,18 @@ def wkb_estimate_of_R(V, Emax, l, scalefactor):
         Rmin = bisec.run(Rmin).params
     else:
         Rmin = jnp.finfo(float).eps ** (2 / (2 * l + 1)) * Rmin
+    Rmin = max(Rmin, 1e-6)
 
     return Rmin, Rmax
+
+
+def check_mode_heath(E_n, E_min, E_max):
+    if E_n.shape[0] == 0:
+        logger.error(f"No modes inside [{E_min:.2f}, {E_max:2f}]")
+        raise Exception()
+    if np.any(np.unique(E_n, return_counts=True)[1] > 1):
+        logger.error("Degeneracy detected. This is impossible in 1D.")
+        raise Exception()
 
 
 def init_eigenstate_library(scalefactor, V, R, N):
@@ -96,7 +114,13 @@ def init_eigenstate_library(scalefactor, V, R, N):
 
     """
 
+    @vmap
+    def init_mult_R_j_params(R_k, X_min, X_max, a, b):
+        return _R_j_params(R_k=R_k, X_min=X_min, X_max=X_max, a=a, b=b)
+
     init_mult_spline_params = vmap(init_1d_interpolation_params, in_axes=(0, 0, 0))
+    eval_splines = vmap(vmap(eval_interp1d, in_axes=(None, 0)), in_axes=(0, None))
+    eval_eigenstates = vmap(vmap(eval_eigenstate, in_axes=(0, None)), in_axes=(None, 0))
 
     def E_min(L):
         """
@@ -106,6 +130,8 @@ def init_eigenstate_library(scalefactor, V, R, N):
         epsilon = 10 * jnp.finfo(jnp.float64).eps
         return (1 + epsilon) * E_c(L, V, scalefactor)
 
+    dXdR = vmap(grad(lambda R: X_of_R(R, a, b)))
+
     # Discetized radial eigenstate
     R_j_R = []
     # Eigenvalues
@@ -113,65 +139,115 @@ def init_eigenstate_library(scalefactor, V, R, N):
     # Quantum numbers
     l_of_j = []
     n_of_j = []
-
     R_0 = []
-    dr = []
+    dR = []
 
-    ll = 0
     E_max = V(R)
-    while True:
-        R_min, R_max = wkb_estimate_of_R(V, E_max, ll, scalefactor)
+    l_max = 0
+    while E_min(L(l_max)) < E_max:
+        l_max += 1
+    l_max -= 1
+    logger.info(f"l_max = {l_max}")
+
+    # Construct chebyshev derivative operator in normalized x space
+    # (log-linear grid)
+    N_cheb = 2**10
+    x, d2dx = chebyshev_d2x(N_cheb)
+    # Impose boundary condition
+    x = x[1:-1]
+    d2dx = d2dx[1:-1, 1:-1]
+    # Clenshaw-Curis weights for Dirichlet BC ( f(-1) = f(1) = 0 )
+    weights = jnp.asarray(clenshaw_curtis_weights(N_cheb)[1:-1])
+
+    for l in range(l_max):
+        E_min_l = E_min(L(l))
+        R_min, R_max = wkb_estimate_of_R(V, E_max, l, scalefactor)
+        X_min, X_max = X_of_R(R_min, a, b), X_of_R(R_max, a, b)
         H_domain = UniformHypercube([N], np.array([R_min, R_max]))
-        logger.info(f"Hamiltonian domain = {H_domain.extends}")
-        r = H_domain.cell_interfaces[0]
 
-        H_diag, H_off_diag = construct_cylindrical_hamiltonian(r, ll, scalefactor, V)
-        E_min_ll = E_min(L(ll))
+        logger.info(f"Hamiltonian domain = [{R_min:.1e},{R_max:.1e}]")
+        R_nonuniform = R_of_X(X_of_x(x, X_min, X_max), a, b)
+        R_uniform = H_domain.cell_interfaces[0]
 
-        # If circular orbit above energy cutoff...stop
-        if E_min_ll > E_max:
-            break
-        logger.info(f"l={ll}, E_min = {E_min_ll:4f}, E_max={E_max:4f}")
-        E_n, u_n = eigh_tridiagonal(
-            H_diag, H_off_diag, select="v", select_range=(E_min_ll, E_max)
-        )
-        # If no mode exists in interval...stop
-        if E_n.shape[0] == 0:
-            logger.info(f"No modes inside [{E_min_ll:4f}, {E_max:4f}]")
-            break
-
-        # Add noise floor to all modes so that the number of roots is equal
-        # to n
-        u_n = u_n + 10 * jnp.finfo(jnp.float64).eps
-
-        # Check if states are degenerate (this is impossible in 1D and bound,
-        # normalizable states. If it happens, numerics is tha cause.
-        # TODO: Maybe
-        if np.any(np.unique(E_n, return_counts=True)[1] > 1):
-            logger.warning(
-                "Degeneracy detected. This is impossible in 1D. "
-                "Consider tweaking N/L."
+        if l < 10:
+            H_diag, H_off_diag = construct_tridiagonal_hamiltonian(
+                R_uniform, l, scalefactor, V
             )
-            break
 
-        R_n = u_n / np.sqrt(r[:, np.newaxis] * (r[1] - r[0]))
-        R_j_R.append(jnp.asarray(R_n.T))
+            E_n, u_n = eigh_tridiagonal(
+                H_diag, H_off_diag, select="v", select_range=(E_min_l, E_max)
+            )
+            check_mode_heath(E_n, E_min_l, E_max)
+
+            # Add noise floor to all modes so that the number of roots is equal
+            # to n
+            u_n = u_n + 10 * jnp.finfo(jnp.float64).eps
+
+            R_n = u_n / np.sqrt(
+                R_uniform[:, np.newaxis] * (R_uniform[1] - R_uniform[0])
+            )
+            R_n = R_n.T
+
+            # Convert to Chebyshev sampling for consitency
+            # u_n_params = init_mult_spline_params(
+            #     jnp.repeat(R_uniform[0], E_n.shape[0]),
+            #     jnp.repeat(R_uniform[1] - R_uniform[0], E_n.shape[0]),
+            #     u_n.T,
+            # )
+            # u_n = eval_splines(R_nonuniform, u_n_params)
+            # norm = (X_max - X_min) / 2 * weights @ u_n**2
+
+            # R_n = u_n / jnp.sqrt(norm * R_nonuniform[:, jnp.newaxis])
+
+        else:
+            # Rescale derivative from normalized x-space [-1, 1] to [X_min, X_max]
+            d2dX = 4.0 / (X_max - X_min) ** 2 * d2dx
+            H = construct_chebyshev_hamiltonian(R_nonuniform, l, scalefactor, V, d2dX)
+
+            E_n, t_n = eig(H)
+            check_mode_heath(E_n, E_min_l, E_max)
+
+            order = jnp.argsort(E_n)
+            E_n = E_n[order].real
+            t_n = t_n[:, order].real
+            t_n = t_n[:, E_n <= E_max]
+            E_n = E_n[E_n <= E_max]
+
+            norm = (X_max - X_min) / 2 * weights @ (t_n**2)
+            R_n = t_n / jnp.sqrt(
+                norm * (dXdR(R_nonuniform) * R_nonuniform)[:, jnp.newaxis]
+            )
+
+            R_n_params = init_mult_R_j_params(
+                R_n.T,
+                jnp.repeat(X_min, E_n.shape[0]),
+                jnp.repeat(X_max, E_n.shape[0]),
+                jnp.repeat(a, E_n.shape[0]),
+                jnp.repeat(b, E_n.shape[0]),
+            )
+            R_n = eval_eigenstates(R_uniform, R_n_params)
+
+        logger.info(
+            f"l={l}: V_eff_min = {E_min_l:.2f} <= "
+            f"E_0 = {E_n[0]:.2f} <= "
+            f"E_max={E_max:.2f}"
+        )
+
+        R_j_R.append(jnp.asarray(R_n))
         E_j.append(jnp.asarray(E_n))
-        l_of_j.append(ll * jnp.ones_like(E_n))
+        l_of_j.append(l * jnp.ones_like(E_n))
         n_of_j.append(jnp.arange(E_n.shape[0]))
-        R_0.append(jnp.repeat(r[0], E_j[-1].shape[0]))
-        dr.append(jnp.repeat(r[1] - r[0], E_j[-1].shape[0]))
+        R_0.append(jnp.repeat(R_uniform[0], E_n.shape[0]))
+        dR.append(jnp.repeat(R_uniform[1] - R_uniform[0], E_n.shape[0]))
         logger.info(f"{E_j[-1].shape[0]} eigenfunctions found")
-
-        ll += 1
 
     R_j_R = jnp.concatenate(R_j_R)
     E_j = jnp.concatenate(E_j)
     l_of_j = jnp.concatenate(l_of_j)
     n_of_j = jnp.concatenate(n_of_j)
     R_0 = jnp.concatenate(R_0)
-    dr = jnp.concatenate(dr)
-    R_j_params = init_mult_spline_params(R_0, dr, R_j_R)
+    dR = jnp.concatenate(dR)
+    R_j_params = init_mult_spline_params(R_0, dR, R_j_R)
 
     return eigenstate_library(
         R_j_params=R_j_params,
@@ -181,11 +257,11 @@ def init_eigenstate_library(scalefactor, V, R, N):
     )
 
 
-def construct_cylindrical_hamiltonian(r, ll, scalefactor, V):
-    N = r.shape[0]
-    dr = r[1] - r[0]
+def construct_tridiagonal_hamiltonian(R, l, scalefactor, V):
+    N = R.shape[0]
+    dR = R[1] - R[0]
     n = np.arange(1, N + 1)
-    H_off_diag = -1 / (2 * scalefactor**2 * dr**2) * np.ones(N - 1)
+    H_off_diag = -1 / (2 * scalefactor**2 * dR**2) * np.ones(N - 1)
     # Construct diagonal elements of the Hamlitonian with modification of the
     # angular momentum barrier to make the finite difference approximation
     # accurate at r=0. (The solution goes as u ~ r^{ll+1/2} for r -> 0,
@@ -194,10 +270,139 @@ def construct_cylindrical_hamiltonian(r, ll, scalefactor, V):
     # (polynomials!)). The diagonal term modification is Eq. 11. from
     # 1807.01392.
     H_diag = (
-        -1 / (2 * scalefactor**2 * dr**2) * -2 * np.ones(N)
+        -1 / (2 * scalefactor**2 * dR**2) * -2 * np.ones(N)
         + 0.5
-        * (n**2 * ((1 - 1 / n) ** (ll + 1 / 2) + (1 + 1 / n) ** (ll + 1 / 2) - 2))
-        / (scalefactor * r) ** 2
-        + V(r)
+        * (n**2 * ((1 - 1 / n) ** (l + 1 / 2) + (1 + 1 / n) ** (l + 1 / 2) - 2))
+        / (scalefactor * R) ** 2
+        + V(R)
     )
     return H_diag, H_off_diag
+
+
+def construct_chebyshev_hamiltonian(R, l, scalefactor, V, d2dX):
+    return (
+        -1.0
+        / (2 * scalefactor**2)
+        * (
+            np.diag((b + a * R) ** 2 / R**2) @ d2dX
+            + jnp.diag(
+                (0.25 - l**2) / R**2
+                - b * (b + 4 * a * R) / (4 * (b + a * R) ** 2 * R**2)
+            )
+        )
+    ) + jnp.diag(V(R))
+
+
+def chebyshev_pts(N):
+    x = np.sin(np.pi * ((N - 1) - 2 * np.linspace(N - 1, 0, N)) / (2 * (N - 1)))
+    return x[::-1]
+
+
+def chebyshev_d2x(N):
+    n1 = np.floor(N / 2).astype(int)
+    n2 = np.ceil(N / 2).astype(int)
+    k = np.arange(N)  # compute theta vector
+    th = k * np.pi / (N - 1)
+
+    x = chebyshev_pts(N)
+
+    # Assemble the differentiation matrices
+    T = np.tile(th / 2, (N, 1))
+    DX = 2 * np.sin(T.T + T) * np.sin(T.T - T)  # trigonometric identity
+    DX[n1:, :] = -np.flipud(np.fliplr(DX[0:n2, :]))  # flipping trick
+    DX[range(N), range(N)] = 1.0  # diagonals of D
+    DX = DX.T
+
+    C = toeplitz((-1.0) ** k)
+    C[0, :] *= 2
+    C[-1, :] *= 2
+    C[:, 0] *= 0.5
+    C[:, -1] *= 0.5
+
+    Z = 1.0 / DX  # Z contains entries 1/(x(k)-x(j))
+    Z[range(N), range(N)] = 0.0  # with zeros on the diagonal.
+
+    D = np.eye(N)
+
+    D = Z * (C * np.tile(np.diag(D), (N, 1)).T - D)
+    D[range(N), range(N)] = -np.sum(D, axis=1)
+    D = 2 * Z * (C * np.tile(np.diag(D), (N, 1)).T - D)
+    D[range(N), range(N)] = -np.sum(D, axis=1)
+
+    return jnp.asarray(x), jnp.asarray(D)
+
+
+def clenshaw_curtis_weights(n):
+    """
+    https://people.math.sc.edu/Burkardt/py_src/quadrule/clenshaw_curtis_compute.py
+    """
+    i = np.arange(n)
+    theta = (n - 1 - i) * np.pi / (n - 1)
+
+    w = np.zeros(n)
+
+    for i in range(0, n):
+        w[i] = 1.0
+
+        jhi = (n - 1) // 2
+
+        for j in range(0, jhi):
+            if 2 * (j + 1) == (n - 1):
+                b = 1.0
+            else:
+                b = 2.0
+
+            w[i] = w[i] - b * np.cos(2.0 * float(j + 1) * theta[i]) / float(
+                4 * j * (j + 2) + 3
+            )
+
+    w[0] = w[0] / float(n - 1)
+    for i in range(1, n - 1):
+        w[i] = 2.0 * w[i] / float(n - 1)
+    w[n - 1] = w[n - 1] / float(n - 1)
+
+    return w[::-1]
+
+
+def x_of_X(X, X_min, X_max):
+    return -1.0 + 2 * (X - X_min) / (X_max - X_min)
+
+
+def X_of_x(x, X_min, X_max):
+    return X_min + (x + 1) * (X_max - X_min) / 2
+
+
+def X_of_R(R, a, b):
+    return a * R + b * jnp.log(R)
+
+
+def R_of_X(X, a, b):
+    if b == 0.0 and a > 0:
+        return X / a
+    if a == 0.0 and b > 0:
+        return jnp.exp(X / b)
+    return b / a * lambertw(a / b * jnp.exp(X / b))
+
+
+dRdX = grad(lambda X: R_of_X(X, a, b))
+dXdR = grad(lambda R: X_of_R(R, a, b))
+
+
+def eval_eigenstate(R, R_j_params):
+    """
+    Barycentric interpolation at Chebyshev points
+    """
+    N = R_j_params.R_k.shape[0]
+    Xmin = R_j_params.X_min
+    Xmax = R_j_params.X_max
+    X = X_of_R(R, R_j_params.a, R_j_params.b)
+    x = x_of_X(jnp.clip(X, Xmin, Xmax), Xmin, Xmax)
+    x_k = chebyshev_pts(N)
+    f_k = R_j_params.R_k
+    C = (-1.0) ** jnp.arange(N)
+    C = C.at[0].divide(2.0)
+    C = C.at[N - 1].divide(2.0)
+    w_div_dx = C / (x - x_k)
+    num = jnp.dot(w_div_dx, f_k)
+    denom = jnp.sum(w_div_dx)
+    return num / denom
