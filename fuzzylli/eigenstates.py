@@ -1,21 +1,25 @@
 import hashlib
 import logging
 from collections import namedtuple
-from functools import partial
 
 import numpy as np
 import jax.numpy as jnp
-from scipy.linalg import toeplitz
 from jax import vmap, grad
 from scipy.linalg import eig, eigh_tridiagonal
 from jaxopt import Broyden, Bisection
 
 from fuzzylli.domain import UniformHypercube
-from fuzzylli.interpolation_jax import init_1d_interpolation_params, eval_interp1d
+from fuzzylli.interpolation_jax import init_1d_interpolation_params
 from fuzzylli.potential import E_c
 from fuzzylli.wavefunction import L
 from fuzzylli.utils import quad
 from fuzzylli.special import lambertw
+from fuzzylli.chebyshev import (
+    chebyshev_pts,
+    chebyshev_d2x,
+    barycentric_interpolation,
+    clenshaw_curtis_weights,
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -119,8 +123,25 @@ def init_eigenstate_library(scalefactor, V, R, N):
         return _R_j_params(R_k=R_k, X_min=X_min, X_max=X_max, a=a, b=b)
 
     init_mult_spline_params = vmap(init_1d_interpolation_params, in_axes=(0, 0, 0))
-    eval_splines = vmap(vmap(eval_interp1d, in_axes=(None, 0)), in_axes=(0, None))
-    eval_eigenstates = vmap(vmap(eval_eigenstate, in_axes=(0, None)), in_axes=(None, 0))
+    eval_cheb_eigenstates = vmap(
+        vmap(
+            lambda R, R_j_params: barycentric_interpolation(
+                x_of_X(
+                    jnp.clip(
+                        X_of_R(R, R_j_params.a, R_j_params.b),
+                        R_j_params.X_min,
+                        R_j_params.X_max,
+                    ),
+                    R_j_params.X_min,
+                    R_j_params.X_max,
+                ),
+                chebyshev_pts(R_j_params.R_k.shape[0]),
+                R_j_params.R_k,
+            ),
+            in_axes=(0, None),
+        ),
+        in_axes=(None, 0),
+    )
 
     def E_min(L):
         """
@@ -179,25 +200,10 @@ def init_eigenstate_library(scalefactor, V, R, N):
             )
             check_mode_heath(E_n, E_min_l, E_max)
 
-            # Add noise floor to all modes so that the number of roots is equal
-            # to n
-            u_n = u_n + 10 * jnp.finfo(jnp.float64).eps
-
             R_n = u_n / np.sqrt(
                 R_uniform[:, np.newaxis] * (R_uniform[1] - R_uniform[0])
             )
             R_n = R_n.T
-
-            # Convert to Chebyshev sampling for consitency
-            # u_n_params = init_mult_spline_params(
-            #     jnp.repeat(R_uniform[0], E_n.shape[0]),
-            #     jnp.repeat(R_uniform[1] - R_uniform[0], E_n.shape[0]),
-            #     u_n.T,
-            # )
-            # u_n = eval_splines(R_nonuniform, u_n_params)
-            # norm = (X_max - X_min) / 2 * weights @ u_n**2
-
-            # R_n = u_n / jnp.sqrt(norm * R_nonuniform[:, jnp.newaxis])
 
         else:
             # Rescale derivative from normalized x-space [-1, 1] to [X_min, X_max]
@@ -225,13 +231,17 @@ def init_eigenstate_library(scalefactor, V, R, N):
                 jnp.repeat(a, E_n.shape[0]),
                 jnp.repeat(b, E_n.shape[0]),
             )
-            R_n = eval_eigenstates(R_uniform, R_n_params)
+            R_n = eval_cheb_eigenstates(R_uniform, R_n_params)
 
         logger.info(
             f"l={l}: V_eff_min = {E_min_l:.2f} <= "
             f"E_0 = {E_n[0]:.2f} <= "
             f"E_max={E_max:.2f}"
         )
+
+        # Add noise floor to all modes so that the number of roots is equal
+        # to n
+        u_n = u_n + 10 * jnp.finfo(jnp.float64).eps
 
         R_j_R.append(jnp.asarray(R_n))
         E_j.append(jnp.asarray(E_n))
@@ -293,77 +303,6 @@ def construct_chebyshev_hamiltonian(R, l, scalefactor, V, d2dX):
     ) + jnp.diag(V(R))
 
 
-def chebyshev_pts(N):
-    x = np.sin(np.pi * ((N - 1) - 2 * np.linspace(N - 1, 0, N)) / (2 * (N - 1)))
-    return x[::-1]
-
-
-def chebyshev_d2x(N):
-    n1 = np.floor(N / 2).astype(int)
-    n2 = np.ceil(N / 2).astype(int)
-    k = np.arange(N)  # compute theta vector
-    th = k * np.pi / (N - 1)
-
-    x = chebyshev_pts(N)
-
-    # Assemble the differentiation matrices
-    T = np.tile(th / 2, (N, 1))
-    DX = 2 * np.sin(T.T + T) * np.sin(T.T - T)  # trigonometric identity
-    DX[n1:, :] = -np.flipud(np.fliplr(DX[0:n2, :]))  # flipping trick
-    DX[range(N), range(N)] = 1.0  # diagonals of D
-    DX = DX.T
-
-    C = toeplitz((-1.0) ** k)
-    C[0, :] *= 2
-    C[-1, :] *= 2
-    C[:, 0] *= 0.5
-    C[:, -1] *= 0.5
-
-    Z = 1.0 / DX  # Z contains entries 1/(x(k)-x(j))
-    Z[range(N), range(N)] = 0.0  # with zeros on the diagonal.
-
-    D = np.eye(N)
-
-    D = Z * (C * np.tile(np.diag(D), (N, 1)).T - D)
-    D[range(N), range(N)] = -np.sum(D, axis=1)
-    D = 2 * Z * (C * np.tile(np.diag(D), (N, 1)).T - D)
-    D[range(N), range(N)] = -np.sum(D, axis=1)
-
-    return jnp.asarray(x), jnp.asarray(D)
-
-
-def clenshaw_curtis_weights(n):
-    """
-    https://people.math.sc.edu/Burkardt/py_src/quadrule/clenshaw_curtis_compute.py
-    """
-    i = np.arange(n)
-    theta = (n - 1 - i) * np.pi / (n - 1)
-
-    w = np.zeros(n)
-
-    for i in range(0, n):
-        w[i] = 1.0
-
-        jhi = (n - 1) // 2
-
-        for j in range(0, jhi):
-            if 2 * (j + 1) == (n - 1):
-                b = 1.0
-            else:
-                b = 2.0
-
-            w[i] = w[i] - b * np.cos(2.0 * float(j + 1) * theta[i]) / float(
-                4 * j * (j + 2) + 3
-            )
-
-    w[0] = w[0] / float(n - 1)
-    for i in range(1, n - 1):
-        w[i] = 2.0 * w[i] / float(n - 1)
-    w[n - 1] = w[n - 1] / float(n - 1)
-
-    return w[::-1]
-
-
 def x_of_X(X, X_min, X_max):
     return -1.0 + 2 * (X - X_min) / (X_max - X_min)
 
@@ -386,23 +325,3 @@ def R_of_X(X, a, b):
 
 dRdX = grad(lambda X: R_of_X(X, a, b))
 dXdR = grad(lambda R: X_of_R(R, a, b))
-
-
-def eval_eigenstate(R, R_j_params):
-    """
-    Barycentric interpolation at Chebyshev points
-    """
-    N = R_j_params.R_k.shape[0]
-    Xmin = R_j_params.X_min
-    Xmax = R_j_params.X_max
-    X = X_of_R(R, R_j_params.a, R_j_params.b)
-    x = x_of_X(jnp.clip(X, Xmin, Xmax), Xmin, Xmax)
-    x_k = chebyshev_pts(N)
-    f_k = R_j_params.R_k
-    C = (-1.0) ** jnp.arange(N)
-    C = C.at[0].divide(2.0)
-    C = C.at[N - 1].divide(2.0)
-    w_div_dx = C / (x - x_k)
-    num = jnp.dot(w_div_dx, f_k)
-    denom = jnp.sum(w_div_dx)
-    return num / denom
