@@ -5,8 +5,10 @@ from collections import namedtuple
 import numpy as np
 import jax.numpy as jnp
 from jax import vmap, grad
+from jax.scipy.special import xlogy
 from scipy.linalg import eig, eigh_tridiagonal
-from jaxopt import Broyden, Bisection
+from jaxopt import ProjectedGradient, Bisection
+from jaxopt.projection import projection_non_negative
 
 from fuzzylli.domain import UniformHypercube
 from fuzzylli.interpolation_jax import init_1d_interpolation_params
@@ -24,7 +26,9 @@ from fuzzylli.chebyshev import (
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-_R_j_params = namedtuple("_R_j_params", ["R_k", "X_min", "X_max", "a", "b"])
+_rescaled_cheb_params = namedtuple(
+    "_rescaled_cheb_params", ["R_k", "X_min", "X_max", "a", "b"]
+)
 
 _eigenstate_library = namedtuple(
     "eigenstate_library", ["R_j_params", "E_j", "l_of_j", "n_of_j"]
@@ -32,6 +36,30 @@ _eigenstate_library = namedtuple(
 
 a = 1.0
 b = 0.0
+
+
+def x_of_X(X, X_min, X_max):
+    return -1.0 + 2 * (X - X_min) / (X_max - X_min)
+
+
+def X_of_x(x, X_min, X_max):
+    return X_min + (x + 1) * (X_max - X_min) / 2
+
+
+def X_of_R(R, a, b):
+    return a * R + xlogy(b, R)
+
+
+def R_of_X(X, a, b):
+    if b == 0.0 and a > 0:
+        return X / a
+    if a == 0.0 and b > 0:
+        return jnp.exp(X / b)
+    return b / a * lambertw(a / b * jnp.exp(X / b))
+
+
+dRdX = grad(lambda X: R_of_X(X, a, b))
+dXdR = grad(lambda R: X_of_R(R, a, b))
 
 
 class eigenstate_library(_eigenstate_library):
@@ -72,12 +100,14 @@ def wkb_estimate_of_R(V, Emax, l, scalefactor):
             jnp.sqrt(2)
             * scalefactor
             * quad(lambda R: jnp.sqrt(R_classical_Veff(R)), R_lower, R_upper)
-            - 36
+            - 20
         )
 
     # Determine classically allowed region (ignoring barrier)
-    broyden = Broyden(fun=R_classical_V)
-    Rmax = 1.05 * broyden.run(jnp.array(1.0)).params
+    pg = ProjectedGradient(
+        fun=lambda R: R_classical_V(R) ** 2, projection=projection_non_negative
+    )
+    Rmax = 1.05 * pg.run(jnp.array(1.0)).params
     Rmin = 0.95 * jnp.nan_to_num(
         jnp.sqrt((l**2 - 1.0 / 4) / (2 * scalefactor**2 * Emax))
     )
@@ -107,6 +137,9 @@ def check_mode_heath(E_n, E_min, E_max):
     if E_n.shape[0] == 0:
         logger.error(f"No modes inside [{E_min:.2f}, {E_max:2f}]")
         raise Exception()
+    if np.any(E_n.imag > 1e-10 * E_n.real):
+        logger.error("Eigenvalue with significant imaginary part found")
+        raise Exception()
     if np.any(np.unique(E_n, return_counts=True)[1] > 1):
         logger.error("Degeneracy detected. This is impossible in 1D.")
         raise Exception()
@@ -119,8 +152,8 @@ def init_eigenstate_library(scalefactor, V, R, N):
     """
 
     @vmap
-    def init_mult_R_j_params(R_k, X_min, X_max, a, b):
-        return _R_j_params(R_k=R_k, X_min=X_min, X_max=X_max, a=a, b=b)
+    def init_mult_cheb_params(R_k, X_min, X_max, a, b):
+        return _rescaled_cheb_params(R_k=R_k, X_min=X_min, X_max=X_max, a=a, b=b)
 
     init_mult_spline_params = vmap(init_1d_interpolation_params, in_axes=(0, 0, 0))
     eval_cheb_eigenstates = vmap(
@@ -165,9 +198,9 @@ def init_eigenstate_library(scalefactor, V, R, N):
 
     E_max = V(R)
     l_max = 0
-    while E_min(L(l_max)) < E_max:
-        l_max += 1
-    l_max -= 1
+    # while E_min(L(l_max)) < E_max:
+    #     l_max += 1
+    # l_max -= 1
     logger.info(f"l_max = {l_max}")
 
     # Construct chebyshev derivative operator in normalized x space
@@ -224,7 +257,7 @@ def init_eigenstate_library(scalefactor, V, R, N):
                 norm * (dXdR(R_nonuniform) * R_nonuniform)[:, jnp.newaxis]
             )
 
-            R_n_params = init_mult_R_j_params(
+            R_n_params = init_mult_cheb_params(
                 R_n.T,
                 jnp.repeat(X_min, E_n.shape[0]),
                 jnp.repeat(X_max, E_n.shape[0]),
@@ -267,18 +300,27 @@ def init_eigenstate_library(scalefactor, V, R, N):
     )
 
 
+def construct_naive_tridiagonal_hamiltonian(R, l, scalefactor, V):
+    """
+    DONT USE THIS. FOR DEMONSTRATION PURPOSES ONLY!
+    """
+    N = R.shape[0]
+    dR = R[1] - R[0]
+    H_off_diag = -1 / (2 * scalefactor**2 * dR**2) * np.ones(N - 1)
+    H_diag = (
+        -1 / (2 * scalefactor**2 * dR**2) * -2 * np.ones(N)
+        - (0.25 - l**2) / (2 * scalefactor * R) ** 2
+        + V(R)
+    )
+    return H_diag, H_off_diag
+
+
 def construct_tridiagonal_hamiltonian(R, l, scalefactor, V):
     N = R.shape[0]
     dR = R[1] - R[0]
     n = np.arange(1, N + 1)
     H_off_diag = -1 / (2 * scalefactor**2 * dR**2) * np.ones(N - 1)
-    # Construct diagonal elements of the Hamlitonian with modification of the
-    # angular momentum barrier to make the finite difference approximation
-    # accurate at r=0. (The solution goes as u ~ r^{ll+1/2} for r -> 0,
-    # i.e. non-polynomial and thus hard to approximate with standard finite
-    # differences formulas which are derived via Taylor expansion
-    # (polynomials!)). The diagonal term modification is Eq. 11. from
-    # 1807.01392.
+    # The diagonal term modification is Eq. 11. from1807.01392.
     H_diag = (
         -1 / (2 * scalefactor**2 * dR**2) * -2 * np.ones(N)
         + 0.5
@@ -301,27 +343,3 @@ def construct_chebyshev_hamiltonian(R, l, scalefactor, V, d2dX):
             )
         )
     ) + jnp.diag(V(R))
-
-
-def x_of_X(X, X_min, X_max):
-    return -1.0 + 2 * (X - X_min) / (X_max - X_min)
-
-
-def X_of_x(x, X_min, X_max):
-    return X_min + (x + 1) * (X_max - X_min) / 2
-
-
-def X_of_R(R, a, b):
-    return a * R + b * jnp.log(R)
-
-
-def R_of_X(X, a, b):
-    if b == 0.0 and a > 0:
-        return X / a
-    if a == 0.0 and b > 0:
-        return jnp.exp(X / b)
-    return b / a * lambertw(a / b * jnp.exp(X / b))
-
-
-dRdX = grad(lambda X: R_of_X(X, a, b))
-dXdR = grad(lambda R: X_of_R(R, a, b))
