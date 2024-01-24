@@ -38,17 +38,19 @@ from fuzzylli.cosmology import h
 from fuzzylli.df import ConstantAnisotropyDistribution
 
 
-def init_wavefunction(params_rho, df_args, N, seed, load_if_cached):
+def init_wavefunction(
+    load_if_cached, init_routine, optimize_args, rho_kwargs, df_kwargs, N
+):
     """
     Bulk init of all componenets leading to wavfunction fit, including
     wavefunction itself.
     """
-    a_fit = params_rho["scalefactor"]
-    rho = SteadyStateCylinder(**params_rho)
+    a_fit = rho_kwargs["scalefactor"]
+    rho = SteadyStateCylinder(**rho_kwargs)
     V = AxialSymmetricPotential(lambda R: rho(R) / a_fit, rho.R999)
     eigenstate_args = {
-        "for_name": [a_fit, V, rho.R99, N],
-        "for_compute": [a_fit, V, rho.R99, N],
+        "for_name": [a_fit, V, V(rho.R99), N],
+        "for_compute": [a_fit, V, V(rho.R99), N],
     }
     eigenstate_lib = load_or_compute_model(
         load_if_cached,
@@ -58,23 +60,29 @@ def init_wavefunction(params_rho, df_args, N, seed, load_if_cached):
         **eigenstate_args,
     )
     df = ConstantAnisotropyDistribution(
-        params_rho["beta"],
+        rho_kwargs["beta"],
         a_fit,
         V,
         rho,
-        **df_args,
+        **df_kwargs,
         R_max=rho.R999,
     )
     optimization_args = {
-        "for_name": [eigenstate_lib, rho, rho.R99, seed],
-        "for_compute": [eigenstate_lib, rho, df, rho.R99, seed],
+        "for_name": [
+            init_routine,
+            eigenstate_lib,
+            rho,
+            rho.R99,
+            *optimize_args,
+        ],
+        "for_compute": [eigenstate_lib, rho, df, rho.R99, *optimize_args],
     }
 
     wavefunction_params = load_or_compute_model(
         load_if_cached,
         cache_dir,
         psi.wavefunction_params.compute_name,
-        psi.init_wavefunction_params_least_square,
+        init_routine,
         **optimization_args,
     )
     return wavefunction_params
@@ -170,11 +178,19 @@ a_fit = 1.0 / (1 + z_fit)
 beta = params["background_density"]["beta"]
 N = len(params["filament_ensemble"]["orientation"])
 
+init_routines = {
+    "least_square": psi.init_wavefunction_params_least_square,
+    "aLASSO": psi.init_wavefunction_params_adaptive_lasso,
+    "regPoisson": psi.init_wavefunction_params_poisson_process,
+}
+init_routine = init_routines[params["wave_function"]["minimize"]]
+
 spine_gas_params = None
 cylinders = None
 ts = None
 steady_state_density_params = None
-df_params = None
+df_kwargs = None
+optimize_args = None
 
 domain = UniformHypercube(
     [1, 1, 1],
@@ -210,12 +226,18 @@ if rank == 0:
     logger.info(f"{len(spine_gas_params)} cylinder(s) placed")
 
     steady_state_density_params = []
-    df_params = []
+    df_kwargs = []
+    optimize_args = []
     cylinder_grps = [f.create_group(f"cylinders/{i}") for i in range(N)]
     for i, M in enumerate(M_cylinder):
         beta_i = params["background_density"]["beta"][i]
         r0_i = params["background_density"]["r0"][i]
         sigma_i = params["background_density"]["sigma"][i]
+        line_mass_per_particle_i = (
+            params["wave_function"]["mass_per_particle"]
+            * u.from_Msun
+            / (jnp.array(params["filament_ensemble"]["length"][i]) * u.from_Mpc)
+        )
 
         steady_state_density_params.append(
             {
@@ -232,19 +254,26 @@ if rank == 0:
         cylinder_grps[i].attrs.create("sigma2", sigma_i**2)
         save_dict_to_group(f, f"/cylinders/{i}/", dictify(spine_gas_params[i]))
 
-        df_params.append(
+        df_kwargs.append(
             {
                 "R_min": params["phasespace_distribution"]["R_min"][i] * u.from_Mpc / h,
                 "epochs": params["phasespace_distribution"]["epochs"][i],
             }
         )
+        select_optimize_args = {
+            "least_square": [seed],
+            "aLASSO": [seed],
+            "regPoisson": [line_mass_per_particle_i, seed],
+        }
+        optimize_args.append(select_optimize_args[params["wave_function"]["minimize"]])
 
     ts = [0.0]
 
 
 spine_gas_params = comm.bcast(spine_gas_params, root=0)
 ts = comm.bcast(ts, root=0)
-df_params = comm.bcast(df_params, root=0)
+df_kwargs = comm.bcast(df_kwargs, root=0)
+optimize_args = comm.bcast(optimize_args, root=0)
 K = comm.bcast(K, root=0)
 
 steady_state_density_params = comm.bcast(steady_state_density_params, root=0)
@@ -262,7 +291,12 @@ nofdm = not params["general"]["save_fdm"]
 if not (nowdm and nofdm):
     wavefunctions_params = [
         init_wavefunction(
-            steady_state_density_params[i], df_params[i], K[i], seed, load_if_cached
+            load_if_cached,
+            init_routine,
+            optimize_args[i],
+            steady_state_density_params[i],
+            df_kwargs[i],
+            K[i],
         )
         for i in cylinder_idx[rank]
     ]

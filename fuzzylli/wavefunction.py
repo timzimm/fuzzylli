@@ -1,8 +1,6 @@
-import base64
 import hashlib
 import logging
 from collections import namedtuple
-import matplotlib.pyplot as plt
 
 import numpy as np
 import jax
@@ -11,10 +9,11 @@ from jax.scipy.special import erf
 from jaxopt._src.tree_util import tree_map
 import jax.numpy as jnp
 
-from jaxopt import ProximalGradient, GradientDescent, LBFGS
+from jaxopt import ProximalGradient, LBFGS
 from jaxopt.prox import prox_non_negative_lasso
 
-from fuzzylli.interpolation_jax import eval_interp1d as evaluate_spline
+# from fuzzylli.interpolation_jax import eval_interp1d as evaluate_spline
+from fuzzylli.chebyshev import eval_chebyshev_polynomial as evaluate_spline
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -39,7 +38,7 @@ class wavefunction_params(_wavefunction_params):
         # jax arrays are not hashable, so wrap in numpy
         combined.update(
             hashlib.md5(
-                np.array(eigenstate_library.R_j_params.f).tobytes()
+                np.array(eigenstate_library.R_j_params.coeffs).tobytes()
                 + np.array([rho_target(R)]).tobytes()
                 + np.array([R_fit]).tobytes()
                 + np.array([scalar_arg for scalar_arg in scalar_args]).tobytes()
@@ -55,7 +54,7 @@ def L(l):
     accuracy seems mainly affected by the l=0 case, especially for radially
     biased (beta > 0) dispersion. In this case the DF diverges as L^(-beta)
     """
-    return jnp.where(l > 0, jnp.sqrt(l**2 - 1 / 4), 0.1)
+    return jnp.where(l > 0, l, 0.1)
 
 
 def _data_generation_gaussian_noise(rho_target, R_fit, N_fit, key, sigma):
