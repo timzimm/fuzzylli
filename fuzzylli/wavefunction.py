@@ -12,8 +12,7 @@ import jax.numpy as jnp
 from jaxopt import ProximalGradient, LBFGS
 from jaxopt.prox import prox_non_negative_lasso
 
-# from fuzzylli.interpolation_jax import eval_interp1d as evaluate_spline
-from fuzzylli.chebyshev import eval_chebyshev_polynomial as evaluate_spline
+from fuzzylli.eigenstates import eval_eigenstate, L
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -38,7 +37,7 @@ class wavefunction_params(_wavefunction_params):
         # jax arrays are not hashable, so wrap in numpy
         combined.update(
             hashlib.md5(
-                np.array(eigenstate_library.R_j_params.coeffs).tobytes()
+                np.array(eigenstate_library.R_j_params.f).tobytes()
                 + np.array([rho_target(R)]).tobytes()
                 + np.array([R_fit]).tobytes()
                 + np.array([scalar_arg for scalar_arg in scalar_args]).tobytes()
@@ -46,15 +45,6 @@ class wavefunction_params(_wavefunction_params):
         )
         combined.update(hashlib.md5(f"{init_routine}".encode("utf-8")).digest())
         return combined
-
-
-def L(l):
-    """
-    A heuristic mapping from quantum l to classical L. Results, i.e. fit
-    accuracy seems mainly affected by the l=0 case, especially for radially
-    biased (beta > 0) dispersion. In this case the DF diverges as L^(-beta)
-    """
-    return jnp.where(l > 0, l, 0.1)
 
 
 def _data_generation_gaussian_noise(rho_target, R_fit, N_fit, key, sigma):
@@ -98,11 +88,11 @@ def _data_generation_poisson_process(rho_target, R_fit, M, key):
     return R_samples
 
 
-evaluate_multiple_splines = vmap(evaluate_spline, in_axes=(None, 0))
-eval_mult_splines_mult_x = vmap(evaluate_multiple_splines, in_axes=(0, None))
+evaluate_multiple_eigenstates = vmap(eval_eigenstate, in_axes=(None, 0))
+eval_mult_eigenstates_mult_x = vmap(evaluate_multiple_eigenstates, in_axes=(0, None))
 
 
-def truncated_spline(R, R_cut, spline_params):
+def truncated_eigenstate(R, R_cut, eigenstate_params):
     """
     Smooth truncation of "spline" defined by "spline_params" beyond R_cut
     """
@@ -112,10 +102,12 @@ def truncated_spline(R, R_cut, spline_params):
         cut_scale = x_cut - 5 * transition_scale
         return 1 / 2 * (erf((cut_scale - x) / transition_scale) + 1)
 
-    return mask(R, R_cut) * evaluate_spline(R, spline_params)
+    return mask(R, R_cut) * eval_eigenstate(R, eigenstate_params)
 
 
-evaluate_multiple_truncated_splines = vmap(truncated_spline, in_axes=(None, None, 0))
+evaluate_multiple_truncated_eigenstates = vmap(
+    truncated_eigenstate, in_axes=(None, None, 0)
+)
 
 
 def _spiral_tap(
@@ -258,7 +250,7 @@ def init_wavefunction_params_poisson_process(
     prefactor = jnp.where(eigenstate_library.l_of_j > 0, 2.0, 1.0)
     R_j2_R = (
         R_i[:, jnp.newaxis]
-        * eval_mult_splines_mult_x(R_i, eigenstate_library.R_j_params) ** 2
+        * eval_mult_eigenstates_mult_x(R_i, eigenstate_library.R_j_params) ** 2
     ).reshape(bin_count, glx.shape[0], -1)
 
     # This (system) matrix maps eigenstate coefficients to the expected number of
@@ -361,7 +353,7 @@ def init_wavefunction_params_least_square(
         prefactor[jnp.newaxis, :]
         * total_mass
         / (2 * jnp.pi)
-        * eval_mult_splines_mult_x(R, eigenstate_library.R_j_params) ** 2
+        * eval_mult_eigenstates_mult_x(R, eigenstate_library.R_j_params) ** 2
     )
 
     @jit
@@ -462,7 +454,7 @@ def init_wavefunction_params_adaptive_lasso(
             prefactor[jnp.newaxis, :]
             * total_mass
             / (2 * jnp.pi)
-            * eval_mult_splines_mult_x(R, active_library.R_j_params) ** 2
+            * eval_mult_eigenstates_mult_x(R, active_library.R_j_params) ** 2
         )
 
         R_j2_R = R_j2_R / prior_lambda_j
@@ -499,7 +491,7 @@ def init_wavefunction_params_adaptive_lasso(
 def psi(R, phi, t, wavefunction_params):
     """Computes the evolution of the wavefunction psi(R,phi,t)"""
 
-    R_j_R = evaluate_multiple_truncated_splines(
+    R_j_R = evaluate_multiple_truncated_eigenstates(
         R, wavefunction_params.R_fit, wavefunction_params.eigenstate_library.R_j_params
     )
     e_ilphi_milphi = jnp.c_[
@@ -576,7 +568,7 @@ def rho(R, wavefunction_params):
         prefactor[jnp.newaxis, :]
         * wavefunction_params.total_mass
         / (2 * jnp.pi)
-        * evaluate_multiple_truncated_splines(
+        * evaluate_multiple_truncated_eigenstates(
             R,
             wavefunction_params.R_fit,
             wavefunction_params.eigenstate_library.R_j_params,
@@ -595,7 +587,7 @@ def gamma(R, t, wavefunction_params):
         prefactor[jnp.newaxis, :]
         * wavefunction_params.total_mass
         / (2 * jnp.pi)
-        * evaluate_multiple_truncated_splines(
+        * evaluate_multiple_truncated_eigenstates(
             R,
             wavefunction_params.R_fit,
             wavefunction_params.eigenstate_library.R_j_params,

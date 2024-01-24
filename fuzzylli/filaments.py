@@ -74,6 +74,7 @@ def init_finite_straight_filament_spine_gas(N, r, l, seed, domain, lengths):
         direction = sample_from_S(1, domain.dim, key_dir).squeeze()
         R = np.asarray(R_from(jnp.array([0, 0, 1]), direction))
         collide = False
+        print(origin)
         for c in cylinders:
             for v in domain.L * translations.cell_centers_cartesian:
                 new_cylinder_t = fcl.Transform3f(R, np.asarray(origin + v))
