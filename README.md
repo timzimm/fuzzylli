@@ -44,7 +44,7 @@ involving the FDM wavefunction
 reasonably efficient (thanks to `jax.jit`).
 
 <figure>
-  <img src="https://github.com/timzimm/fuzzylli/blob/2aecf2029754e7ef9d86a9b11a99cb1d6d2603c6/images/crosssections.png" alt="" width="750" align="center">
+  <img src="https://github.com/timzimm/fuzzylli/blob/fca7a9bca0a1dbd60dfa59b4b30f2cdb3e930b81/images/crossection.png" alt="" width="750" align="center">
   <figcaption align="center">Filament cross sections as a function of axion/FDM mass</figcaption>
 </figure>
 <br/><br/>
@@ -88,5 +88,5 @@ If you use fuzzylli for any publication we kindly ask you to cite
 TODO
 
 ## Acknowledgement
-![eu](https://github.com/james-alvey-42/jaxsp/blob/67be7bc188841bdf2bed02e72659245f0a2b2a1b/images/eu_acknowledgement_compsci_3.png#gh-light-mode-only)
-![eu](https://github.com/james-alvey-42/jaxsp/blob/0a2a65a2cca5f1f8c2d6591d2a9e48cabb41ff96/images/eu_acknowledgement_compsci_3_white.png#gh-dark-mode-only)
+![eu](https://github.com/timzimm/fuzzylli/blob/fca7a9bca0a1dbd60dfa59b4b30f2cdb3e930b81/images/eu_acknowledgement_compsci_3.png#gh-light-mode-only)
+![eu](https://github.com/timzimm/fuzzylli/blob/fca7a9bca0a1dbd60dfa59b4b30f2cdb3e930b81/images/eu_acknowledgement_compsci_3_white.png#gh-dark-mode-only)
