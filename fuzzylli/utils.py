@@ -1,41 +1,110 @@
+import builtins
+from functools import wraps, partial
+from typing import Any, Callable, TypeVar
+from collections.abc import Sequence
+
 import numpy as np
-from jax import jit
+import jax
 import jax.numpy as jnp
-import jax.random as random
-import jax.lax as lax
-from blackjax import nuts
+
+
+from jax.tree_util import tree_unflatten, tree_flatten, tree_map
+
+
+T = TypeVar("T")
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _tree_map_multi_output(f, *args):
+    """Like tree_map, but for functions that return tuples."""
+    leaves, treedefs = zip(*builtins.map(tree_flatten, args))
+    if any(treedef != treedefs[0] for treedef in treedefs):
+        raise ValueError(f"argument treedefs do not match {treedefs=}")
+    outputs = zip(*builtins.map(f, *leaves))
+    return tuple(tree_unflatten(treedefs[0], out) for out in outputs)
+
+
+def _lax_map(f, *xs, **kwargs):
+    """Like lax.map, but supports multiple arguments like the built-in map."""
+    _, ys = jax.lax.scan(lambda _, x: ((), f(*x, **kwargs)), (), xs)
+    return ys
+
+
+def map_vmap(
+    f: F,
+    in_axes: int | None | Sequence[Any] = 0,
+    out_axes: Any = 0,
+    *,
+    batch_size: int,
+) -> F:
+    """jax.vmap, but looping when the batch dimension exceeds batch_size."""
+
+    def preprocess(x, in_axis):
+        batch_count = x.shape[in_axis] // batch_size
+        x = jax.numpy.moveaxis(x, in_axis, 0)
+        loop_elements = batch_count * batch_size
+        x_loop = x[:loop_elements].reshape((batch_count, batch_size) + x.shape[1:])
+        x_tail = x[loop_elements:]
+        return x_loop, x_tail
+
+    def postprocess(x_loop, x_tail, out_axis):
+        shape = x_loop.shape
+        x_loop = x_loop.reshape((shape[0] * shape[1],) + shape[2:])
+        x = jax.numpy.concatenate([x_loop, x_tail], axis=0)
+        return jax.numpy.moveaxis(x, 0, out_axis)
+
+    @wraps(f)
+    def _batch_vmap_wrapper(*args, **kwargs):
+        if isinstance(in_axes, int) or in_axes is None:
+            in_axes_tuple = (in_axes,) * len(args)
+        else:
+            in_axes_tuple = tuple(in_axes)
+
+        broadcasts_args: list[Any] = []
+        batched_args: list[Any] = []
+        remainder_args: list[Any] = []
+
+        for i, (arg, in_axis) in enumerate(zip(args, in_axes_tuple)):
+            if in_axis is None:
+                broadcasts_args.append((i, arg))
+            elif isinstance(in_axis, int):
+                loop_arg, tail_arg = _tree_map_multi_output(
+                    partial(preprocess, in_axis=in_axis), arg
+                )
+                batched_args.append(loop_arg)
+                remainder_args.append(tail_arg)
+            else:
+                loop_arg, tail_arg = _tree_map_multi_output(preprocess, arg, in_axis)
+                batched_args.append(loop_arg)
+                remainder_args.append(tail_arg)
+
+        def vmap_f(*args, **kwargs):
+            args2 = list(args)
+            for i, arg in broadcasts_args:
+                args2.insert(i, arg)
+            return f(*args2, **kwargs)
+
+        loop_out = _lax_map(jax.vmap(vmap_f), *batched_args, **kwargs)
+        tail_out = jax.vmap(vmap_f)(*remainder_args, **kwargs)
+        if isinstance(out_axes, int):
+            out = tree_map(partial(postprocess, out_axis=out_axes), loop_out, tail_out)
+        else:
+            out = tree_map(postprocess, loop_out, tail_out, out_axes)
+        return out
+
+    return _batch_vmap_wrapper  # type: ignore
 
 
 def quad(f, a, b):
     """
-    Fixed order (order=12) Gauss-Legendre quadrature for integration of f(x)
+    Fixed order (order=16) Gauss-Legendre quadrature for integration of f(x)
     from x=a to x=b
     """
-    glx, glw = np.polynomial.legendre.leggauss(12)
+    glx, glw = np.polynomial.legendre.leggauss(16)
     glx = jnp.asarray(0.5 * (glx + 1))
     glw = jnp.asarray(0.5 * glw)
     x_i = a + (b - a) * glx
     return (b - a) * f(x_i) @ glw
-
-
-def inference_loop(rng_key, initial_states, tuned_params, log_prob_fn, num_samples):
-    """
-    HMC boiler plate. Code taken from blackjax documentation.
-    """
-    step_fn = nuts.kernel()
-
-    def kernel(key, state, **params):
-        return step_fn(key, state, log_prob_fn, **params)
-
-    @jit
-    def one_step(states, rng_key):
-        states, infos = kernel(rng_key, states, **tuned_params)
-        return states, (states, infos)
-
-    keys = random.split(rng_key, num_samples)
-    _, (states, infos) = lax.scan(one_step, initial_states, keys)
-
-    return (states, infos)
 
 
 """

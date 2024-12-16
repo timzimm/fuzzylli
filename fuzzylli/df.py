@@ -1,6 +1,7 @@
 from functools import partial
 import logging
 from abc import ABC, abstractmethod
+import hashlib
 
 from jax import vmap
 import jax.numpy as jnp
@@ -8,6 +9,7 @@ from jax.scipy.special import gammaln
 
 from fuzzylli.mlp import init_mlp_params, evaluate_mlp, mlp_optimization
 from fuzzylli.utils import quad
+from fuzzylli.io_utils import hash_to_int64
 from fuzzylli.potential import E_c
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,7 @@ class CylindricalDistributionFunction(ABC):
         R_min=None,
         R_max=None,
         N_optimization=None,
+        df_params=None,
     ):
         self.scalefactor = scalefactor
         self.potential = potential
@@ -56,13 +59,38 @@ class CylindricalDistributionFunction(ABC):
         )
         self.logrho_target_R = jnp.log(self.rho_target(jnp.exp(self.logR)))
 
-        self.df_params = mlp_optimization(
-            self.epochs,
-            self.init_params,
-            self._logrho_from_df_batched,
-            self.logR,
-            self.logrho_target_R,
-        )
+        if df_params is None:
+            self.df_params = mlp_optimization(
+                self.epochs,
+                self.init_params,
+                self._logrho_from_df_batched,
+                self.logR,
+                self.logrho_target_R,
+            )
+        else:
+            self.df_params = df_params
+
+    @classmethod
+    def compute_name(
+        cls,
+        scalefactor,
+        potential,
+        rho,
+        epochs=2000,
+        R_min=None,
+        R_max=None,
+        N_optimization=None,
+        df_params=None,
+    ):
+        combined = hashlib.sha256()
+        combined.update(hashlib.md5(jnp.array(scalefactor)).digest())
+        combined.update(hashlib.md5(jnp.array(potential.name)).digest())
+        combined.update(hashlib.md5(jnp.array(rho.name)).digest())
+        combined.update(hashlib.md5(jnp.array(epochs)).digest())
+        combined.update(hashlib.md5(jnp.array(R_min)).digest())
+        combined.update(hashlib.md5(jnp.array(R_max)).digest())
+        combined.update(hashlib.md5(jnp.array(N_optimization)).digest())
+        return hash_to_int64(combined.hexdigest())
 
     @abstractmethod
     def _eval(self, E, L):
@@ -125,8 +153,16 @@ class ConstantAnisotropyDistribution(CylindricalDistributionFunction):
 
         self.beta = beta
         self.init_params = init_mlp_params([1, 32, 32, 32, 1])
-
         super().__init__(*args, **kwargs)
+
+        self.name = self.compute_name(beta, *args, **kwargs)
+
+    @classmethod
+    def compute_name(cls, beta, *args, **kwargs):
+        combined = hashlib.sha256()
+        combined.update(hashlib.md5(jnp.array(beta)).digest())
+        combined.update(hashlib.md5(super().compute_name(*args, **kwargs)).digest())
+        return combined.hexdigest()
 
     def _logrho_from_df(self, logR, params):
         # Transformed integrand to deal with sqrt divergence

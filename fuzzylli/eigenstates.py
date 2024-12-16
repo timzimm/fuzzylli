@@ -12,6 +12,7 @@ from jaxopt.projection import projection_non_negative
 from fuzzylli.interpolation_jax import init_1d_interpolation_params
 from fuzzylli.potential import E_c
 from fuzzylli.utils import quad
+from fuzzylli.io_utils import hash_to_int64
 from fuzzylli.special import lambertw
 from fuzzylli.chebyshev import (
     chebyshev_pts,
@@ -44,13 +45,13 @@ class eigenstate_library(_eigenstate_library):
         return self.E_j.shape[0]
 
     @classmethod
-    def compute_name(cls, scalefactor, V, E_max, N):
-        return hashlib.md5(
-            np.array([scalefactor]).tobytes()
-            + np.array([V(1.0)]).tobytes()
-            + np.array([E_max]).tobytes()
-            + np.array([N]).tobytes()
-        )
+    def compute_name(cls, scalefactor, V_name, E_max, N):
+        combined = hashlib.sha256()
+        combined.update(hashlib.md5(jnp.array(scalefactor)).digest())
+        combined.update(hashlib.md5(jnp.array(V_name)).digest())
+        combined.update(hashlib.md5(jnp.array(E_max)).digest())
+        combined.update(hashlib.md5(jnp.array(N)).digest())
+        return hash_to_int64(combined.hexdigest())
 
 
 def L(l):
@@ -101,7 +102,7 @@ def check_mode_heath(E_n, E_min, E_max):
     if E_n.shape[0] == 0:
         logger.error(f"No modes inside [{E_min:.2f}, {E_max:2f}]")
         raise Exception()
-    if np.any(E_n.imag > 1e-10 * E_n.real):
+    if np.any(jnp.abs(E_n.imag) > 1e-10 * jnp.abs(E_n.real)):
         logger.error("Eigenvalue with significant imaginary part found")
         raise Exception()
     if np.any(np.unique(E_n, return_counts=True)[1] > 1):
@@ -238,7 +239,7 @@ def init_eigenstate_library(scalefactor, V, E_max, N):
 
         R_j_R.append(jnp.asarray(R_n))
         E_j.append(jnp.asarray(E_n))
-        l_of_j.append(l * jnp.ones_like(E_n))
+        l_of_j.append((l * jnp.ones_like(E_n)).astype(int))
         n_of_j.append(jnp.arange(E_n.shape[0]))
         R_0.append(jnp.repeat(X_uniform_sampling[0], E_n.shape[0]))
         dR.append(

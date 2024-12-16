@@ -13,6 +13,7 @@ from jaxopt import ProximalGradient, LBFGS
 from jaxopt.prox import prox_non_negative_lasso
 
 from fuzzylli.eigenstates import eval_eigenstate, L
+from fuzzylli.io_utils import hash_to_int64
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -30,21 +31,21 @@ class wavefunction_params(_wavefunction_params):
 
     @classmethod
     def compute_name(
-        cls, init_routine, eigenstate_library, rho_target, R_fit, *scalar_args
+        cls, init_routine, eigenstate_library_name, rho_target, R_fit, *scalar_args
     ):
         R = jnp.linspace(R_fit / 10, R_fit, 10)
         combined = hashlib.sha256()
         # jax arrays are not hashable, so wrap in numpy
         combined.update(
             hashlib.md5(
-                np.array(eigenstate_library.R_j_params.f).tobytes()
+                np.array([eigenstate_library_name]).tobytes()
                 + np.array([rho_target(R)]).tobytes()
                 + np.array([R_fit]).tobytes()
                 + np.array([scalar_arg for scalar_arg in scalar_args]).tobytes()
             ).digest()
         )
         combined.update(hashlib.md5(f"{init_routine}".encode("utf-8")).digest())
-        return combined
+        return hash_to_int64(combined.hexdigest())
 
 
 def _data_generation_gaussian_noise(rho_target, R_fit, N_fit, key, sigma):
@@ -189,18 +190,50 @@ def _init_random_phases(eigenstate_library, seed_phase):
     # Each nl gets a random phase but modes with same l always have the same
     # |a_nl|. We divide the l=0 mode to allow for more straightforward
     # computation in rho(...) below
-    return jnp.where(
+    l, m = jax.random.split(seed_phase, 2)
+    phase = jnp.where(
         (eigenstate_library.l_of_j > 0).reshape(-1, 1),
         jnp.exp(
             1.0j
             * random.uniform(
-                seed_phase,
+                l,
                 shape=(eigenstate_library.J, 2),
                 maxval=2 * jnp.pi,
             )
         ),
         1.0 / 2,
     )
+    return _reinit_random_phases(eigenstate_library, m) * phase
+
+
+def _reinit_random_phases(eigenstate_library, key):
+    l, m, q = jax.random.split(key, 3)
+    phase = jnp.where(
+        (eigenstate_library.l_of_j > 0).reshape(-1, 1),
+        jnp.exp(
+            1.0j
+            * jax.random.uniform(
+                l,
+                shape=(eigenstate_library.J, 2),
+                maxval=2 * jnp.pi,
+            )
+        ),
+        0,
+    )
+    phase0 = jnp.where(
+        eigenstate_library.l_of_j == 0,
+        jnp.exp(
+            1.0j
+            * jax.random.uniform(
+                m,
+                shape=(eigenstate_library.J,),
+                maxval=2 * jnp.pi,
+            )
+        ),
+        0,
+    )
+    phase0 = jnp.c_[phase0, phase0]
+    return phase0 + phase
 
 
 def init_wavefunction_params_poisson_process(
@@ -218,12 +251,15 @@ def init_wavefunction_params_poisson_process(
     SPIRAL-TAP.
     """
 
-    M = mu_cdm
-    bin_count = 128
-
     seed_sampling, seed_phase = random.split(random.PRNGKey(seed), 2)
 
-    R_samples = _data_generation_poisson_process(rho_target, R_fit, M, seed_sampling)
+    R_samples = _data_generation_poisson_process(
+        rho_target, R_fit, mu_cdm, seed_sampling
+    )
+    # See Gravsphere paper
+    bin_count = int(np.sqrt(R_samples.shape[0]))
+    logger.info(f"Bin {R_samples.shape[0]} points into {bin_count} bins")
+
     y, e = jnp.histogram(R_samples, bins=bin_count)
     glx, glw = np.polynomial.legendre.leggauss(16)
     glx = jnp.asarray(0.5 * (glx + 1))
@@ -387,6 +423,43 @@ def init_wavefunction_params_least_square(
     )
 
 
+def init_wavefunction_params_wkb(
+    eigenstate_library,
+    rho_target,
+    df,
+    R_fit,
+    seed,
+):
+    """
+    Initializes the wave function coefficients via DF.
+    """
+
+    seed_phase = random.PRNGKey(seed)
+    total_mass = rho_target.total_mass
+
+    active_library = eigenstate_library
+    aj_2 = (
+        df(active_library.E_j, L(active_library.l_of_j)) * (2 * np.pi) ** 2 / total_mass
+    )
+    phase_j = _init_random_phases(active_library, seed_phase)
+    temp = wavefunction_params(
+        total_mass=total_mass,
+        eigenstate_library=active_library,
+        R_fit=R_fit,
+        a_j=jnp.sqrt(aj_2),
+        phase_j=phase_j,
+    )
+    norm = rho(rho_target.r0, temp) / rho_target(rho_target.r0)
+    norm = 1.0
+    return wavefunction_params(
+        total_mass=total_mass,
+        eigenstate_library=active_library,
+        R_fit=R_fit,
+        a_j=jnp.sqrt(aj_2 / norm),
+        phase_j=phase_j,
+    )
+
+
 def init_wavefunction_params_adaptive_lasso(
     eigenstate_library,
     rho_target,
@@ -408,7 +481,7 @@ def init_wavefunction_params_adaptive_lasso(
     # Creates system matrix. Observations along axis 0 and states j along axis 1
     # These parameters have to be fixed *artificially* under gaussian noise
     # conditions.
-    N_fit = 4 * eigenstate_library.J
+    N_fit = 2 * eigenstate_library.J
     sigma = 0.1
 
     seed_sampling, seed_phase = random.split(random.PRNGKey(seed), 2)
@@ -423,18 +496,10 @@ def init_wavefunction_params_adaptive_lasso(
     # This is the leading factor in the gaussian log likelihood
     # taken out of the argmin and thus transferred to the prior term
     global_lambda = 2 * sigma**2
-
     active_library = eigenstate_library
     epsilon = 1
     N = 1
     logger.info("Running adpative lasso optimization...")
-    solver = ProximalGradient(
-        fun=neg_log_likelihood,
-        prox=prox_non_negative_lasso,
-        maxiter=10000,
-        tol=1e-4,
-        acceleration=True,
-    )
     aj_2 = 1.0 * jnp.ones_like(active_library.E_j)
     while epsilon > 1e-4:
         # WKB asymptote as scale of the exponential prior. Postivity of all
@@ -458,27 +523,34 @@ def init_wavefunction_params_adaptive_lasso(
         )
 
         R_j2_R = R_j2_R / prior_lambda_j
+        solver = ProximalGradient(
+            fun=neg_log_likelihood,
+            prox=prox_non_negative_lasso,
+            maxiter=10000,
+            tol=1e-4,
+            acceleration=True,
+        )
 
         res = solver.run(aj_2, hyperparams_prox=global_lambda)
         aj_2 = res.params
         non_zero_modes_j = jnp.nonzero(aj_2)
 
         epsilon = res.state.error
-        N += 1
         aj_2 = aj_2[non_zero_modes_j]
         active_library = tree_map(lambda coefs: coefs[non_zero_modes_j], active_library)
         logger.info(
             f"Super iteration {N} stopped after {res.state.iter_num} iterations "
             f"(error = {res.state.error:.5f}, active set = {active_library.J})"
         )
+        N += 1
         if N == 100:
             break
 
     aj_2 = aj_2 / prior_lambda_j[non_zero_modes_j]
+    phase_j = _init_random_phases(active_library, seed_phase)
     logger.info(
         f"{active_library.J}/{eigenstate_library.J} modes have non-vanishing coefficents"
     )
-    phase_j = _init_random_phases(active_library, seed_phase)
     return wavefunction_params(
         total_mass=total_mass,
         eigenstate_library=active_library,
@@ -527,8 +599,8 @@ def velocity(R, phi, t, wavefunction_params):
     """Computes the conjugate velocty u. The peculiar velocity v=u/a"""
     psi_Rphit = psi(R, phi, t, wavefunction_params)
     del_psi_Rphit = grad_psi(R, phi, t, wavefunction_params)
-    v = jnp.imag(jnp.conjugate(psi_Rphit) * del_psi_Rphit) / jnp.abs(psi_Rphit) ** 2
-    return v.squeeze()
+    u = jnp.imag(jnp.conjugate(psi_Rphit) * del_psi_Rphit) / jnp.abs(psi_Rphit) ** 2
+    return u.squeeze()
 
 
 def vorticity(R, phi, t, wavefunction_params):
@@ -568,9 +640,10 @@ def rho(R, wavefunction_params):
         prefactor[jnp.newaxis, :]
         * wavefunction_params.total_mass
         / (2 * jnp.pi)
-        * evaluate_multiple_truncated_eigenstates(
+        # * evaluate_multiple_truncated_eigenstates(
+        * evaluate_multiple_eigenstates(
             R,
-            wavefunction_params.R_fit,
+            # wavefunction_params.R_fit,
             wavefunction_params.eigenstate_library.R_j_params,
         )
         ** 2

@@ -1,10 +1,24 @@
 from collections import namedtuple
+import hashlib
+
 import jax.numpy as jnp
 from jax.lax import dynamic_slice
 
+from fuzzylli.io_utils import hash_to_int64
+
 # Note: This is a reduced version of dbstein/fast_interp
 
-interpolation_params = namedtuple("interpolation_params", ["a", "dx", "f", "lb", "ub"])
+_interpolation_params = namedtuple("interpolation_params", ["a", "dx", "f", "lb", "ub"])
+
+
+class interpolation_params(_interpolation_params):
+    @classmethod
+    def compute_name(cls, a, dx, f):
+        combined = hashlib.sha256()
+        combined.update(hashlib.md5(jnp.array(a)).digest())
+        combined.update(hashlib.md5(jnp.array(dx)).digest())
+        combined.update(hashlib.md5(jnp.array(f)).digest())
+        return hash_to_int64(combined.hexdigest())
 
 
 def _extrapolate1d_x(f):

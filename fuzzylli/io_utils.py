@@ -1,3 +1,4 @@
+import math
 import pickle
 import logging
 import os
@@ -6,11 +7,6 @@ import jax.numpy as jnp
 import h5py
 import jax
 import ruamel.yaml
-
-from fuzzylli.wavefunction import wavefunction_params
-from fuzzylli.eigenstates import eigenstate_library
-from fuzzylli.interpolation_jax import interpolation_params
-
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -82,34 +78,38 @@ def load_dict_from_group(h5file, path):
     return ans
 
 
-def load_model(cache_dir, name_of, *name_args):
-    name = name_of(*name_args).hexdigest()
-    if os.path.exists(f"{cache_dir}/{name}"):
-        logger.info(f"Model already computed. Load {name}...")
-        with open(f"{cache_dir}/{name}", mode="rb") as file:
-            return pickle.load(file)
-    else:
-        logger.error("No model found. Abort ...")
-        exit(1)
-
-
-def compute_and_save_model(cache_dir, name_of, compute, **kwargs):
-    name_args = kwargs["for_name"]
-    compute_args = kwargs["for_compute"]
-    name = name_of(*name_args).hexdigest()
-    model = compute(*compute_args)
-    with open(f"{cache_dir}/{name}", mode="wb") as file:
-        pickle.dump(model, file)
+def load_model(cache_dir, name):
+    logger.info(f"Loading {name}...")
+    with open(f"{cache_dir}/{name}", mode="rb") as file:
+        model = pickle.load(file)
     return model
 
 
+def save_model(overwrite, cache_dir, name, model):
+    if not os.path.exists(f"{cache_dir}/{name}") or overwrite:
+        logger.info(f"Saving {name}...")
+        with open(f"{cache_dir}/{name}", mode="wb") as file:
+            pickle.dump(model, file)
+
+
+def compute_and_save_model(cache_dir, name_of, compute, **kwargs):
+    compute_args = kwargs["for_compute"]
+    name_args = kwargs["for_name"]
+    model = compute(*compute_args)
+    name = name_of(*name_args)
+    save_model(True, cache_dir, name, model)
+    return name, model
+
+
 def load_or_compute_model(load_if_available, cache_dir, name_of, compute, **kwargs):
-    name = name_of(*kwargs["for_name"]).hexdigest()
+    compute_args = kwargs["for_compute"]
+    name_args = kwargs["for_name"]
+    name = name_of(*name_args)
     if os.path.exists(f"{cache_dir}/{name}") and load_if_available:
-        return load_model(cache_dir, name_of, *kwargs["for_name"])
+        return name, load_model(cache_dir, name)
     else:
         logger.info("No model found/Recompute enforced. Compute it...")
-        return compute_and_save_model(cache_dir, name_of, compute, **kwargs)
+        return name, compute(*compute_args)
 
 
 # TODO: This is horrible. Make it better
@@ -140,3 +140,9 @@ def load_wavefunctions_params_from_hdf5(file):
             )
         )
     return wavefunctions_params
+
+
+def hash_to_int64(digested_hash):
+    num = int(digested_hash, 16)
+    num = num // 10 ** (int(math.log(num, 10)) - 18 + 1)
+    return jnp.int64(num)

@@ -1,13 +1,15 @@
 import logging
+import hashlib
 
+import jax
 import jax.numpy as jnp
-from jax import jit, grad, vmap
 from jax.lax import cond
 from jax.scipy.special import xlogy
 
 from jaxopt import Bisection, ScipyBoundedMinimize
 
 from fuzzylli.utils import quad
+from fuzzylli.io_utils import hash_to_int64
 from fuzzylli.spline import init_spline_params, evaluate_spline
 from fuzzylli.special import bessel_int_J0
 
@@ -15,7 +17,7 @@ from fuzzylli.special import bessel_int_J0
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-quad = vmap(quad, in_axes=(None, 0, 0))
+quad = jax.vmap(quad, in_axes=(None, 0, 0))
 
 
 def V_eff(R, L, V, scalefactor):
@@ -31,7 +33,7 @@ def R_g(L, V, scalefactor):
     Guiding radius of circular orbit
     """
     solver = Bisection(
-        optimality_fun=jit(grad(lambda R: V_eff(R, L, V, scalefactor))),
+        optimality_fun=jax.jit(jax.grad(lambda R: V_eff(R, L, V, scalefactor))),
         lower=jnp.finfo(float).eps,
         upper=V.R_max,
         check_bracket=False,
@@ -77,6 +79,20 @@ class AxialSymmetricPotential:
         self.__compute_potential_force_asymptotic()
 
         self._V0 = self._V_asymptote_small(0.0)
+
+        result_shape = jax.ShapeDtypeStruct((), jnp.int64)
+        self.name = jax.pure_callback(
+            self.compute_name, result_shape, source.name, R_max, R_min=R_min, N=N
+        )
+
+    @classmethod
+    def compute_name(cls, source_name, R_max, R_min=0, N=None):
+        combined = hashlib.sha256()
+        combined.update(hashlib.md5(jnp.array(source_name)).digest())
+        combined.update(hashlib.md5(jnp.array(R_max)).digest())
+        combined.update(hashlib.md5(jnp.array(R_min)).digest())
+        combined.update(hashlib.md5(jnp.array(N)).digest())
+        return hash_to_int64(combined.hexdigest())
 
     def __call__(self, R):
         """
@@ -128,7 +144,7 @@ class AxialSymmetricPotential:
             # solution. We set the lower bound by comparing its rate of change
             # against the maximum rate of change and deem dV(R_min)/DR = 0.01
             # (dV/DR)_max as reasonable lower bound.
-            @jit
+            @jax.jit
             def negative_dV_dR(R):
                 return xlogy(R, R) * self.rho(R)
 
@@ -141,7 +157,7 @@ class AxialSymmetricPotential:
             dV_dR_max = minimize_res.params
             logger.info(f"dV/dR_max = {dV_dR_max:.3f}")
 
-            @jit
+            @jax.jit
             def objective(R):
                 return jnp.abs(negative_dV_dR(R) / negative_dV_dR(dV_dR_max)) - 0.01
 
@@ -295,7 +311,7 @@ class NonAxialSymmetricPotential:
 
     def __init__(self, dx, N):
         self.gamma = 0.5772156649015329
-        self.Ji0 = vmap(bessel_int_J0)
+        self.Ji0 = jax.vmap(bessel_int_J0)
         self.dx = dx
         self.N = N
         self.G_k = self.__init_greens_function(dx, N)

@@ -1,20 +1,29 @@
 from abc import ABC, abstractmethod
+import hashlib
 
 from scipy.integrate import quad as scipy_quad
-from jax import jit, grad
+import jax
 import jax.numpy as jnp
 from jax.random import split, PRNGKey, uniform
 from jax.scipy.special import erf
 from jaxopt import ScipyRootFinding
-import blackjax
+import numpy as np
 
-from fuzzylli.utils import quad, inference_loop
+from fuzzylli.utils import quad
+from fuzzylli.io_utils import hash_to_int64
 
 
 class RadialDensity(ABC):
     def __init__(self, r_cut=0, seed=42):
         self.r_cut = r_cut
         self.seed = PRNGKey(seed)
+
+    @classmethod
+    def compute_name(cls, r_cut=0, seed=42):
+        combined = hashlib.sha256()
+        combined.update(hashlib.md5(np.array(r_cut)).digest())
+        combined.update(hashlib.md5(np.array(seed)).digest())
+        return hash_to_int64(combined.hexdigest())
 
     def __density_polar(self, R):
         return 2 * jnp.pi * R * self(R)
@@ -89,32 +98,13 @@ class RadialDensity(ABC):
         """
         M = self.total_mass
 
-        @jit
+        @jax.jit
         def objective(R):
             return self.enclosed_mass(R) / M - mass_fraction
 
         r0 = 1.0
         res = ScipyRootFinding(optimality_fun=objective, method="hybr").run(r0)
         return res.params
-
-    def sample(self, N):
-        """
-        Fallback sampling via MCMC (if no direct inversion is possible)
-        """
-
-        def log_jacobian_fn(logR):
-            return jnp.log(jnp.abs(grad(lambda t: jnp.exp(2 * t))(logR)))
-
-        def log_rho(logR):
-            R = jnp.exp(logR)
-            return jnp.log(self(R)) + log_jacobian_fn(logR)
-
-        warmup = blackjax.window_adaptation(blackjax.nuts, log_rho)
-        seed_warmup, seed_sample = split(self.seed, 2)
-        (state, tuned_params), _ = warmup.run(seed_warmup, 0.0, 1000)
-
-        samples, infos = inference_loop(seed_sample, state, tuned_params, log_rho, N)
-        return jnp.exp(samples.position)
 
 
 class SteadyStateCylinder(RadialDensity):
@@ -136,6 +126,29 @@ class SteadyStateCylinder(RadialDensity):
         self.beta = beta
         self.sigma2 = sigma2
         self.scalefactor = scalefactor
+        result_shape = jax.ShapeDtypeStruct((), jnp.int64)
+        self.name = jax.pure_callback(
+            self.compute_name,
+            result_shape,
+            r0,
+            beta,
+            sigma2,
+            scalefactor,
+            *args,
+            **kwargs
+        )
+
+    @classmethod
+    def compute_name(cls, r0, beta, sigma2, scalefactor, *args, **kwargs):
+        combined = hashlib.sha256()
+        combined.update(hashlib.md5(jnp.array(r0)).digest())
+        combined.update(hashlib.md5(jnp.array(beta)).digest())
+        combined.update(hashlib.md5(jnp.array(sigma2)).digest())
+        combined.update(hashlib.md5(jnp.array(scalefactor)).digest())
+        combined.update(
+            hashlib.md5(jnp.array(super().compute_name(*args, **kwargs))).digest()
+        )
+        return hash_to_int64(combined.hexdigest())
 
     def __call__(self, R):
         """

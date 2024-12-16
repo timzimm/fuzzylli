@@ -145,12 +145,8 @@ def hard_cylinder_cutoff_along_z(rho, norm_z, length):
 
 
 def soft_cylinder_cutoff_along_z(rho, norm_z, length):
-    def mask(x, x_cut):
-        transition_scale = x_cut / 100
-        cut_scale = x_cut - 5 * transition_scale
-        return 1 / 2 * (erf((cut_scale - x) / transition_scale) + 1)
-
-    return (mask(norm_z, length / 2) * rho).squeeze()
+    eps = 10 / length
+    return (1 / 2 * (erf(eps * (length / 2 - norm_z)) + 1) * rho).squeeze()
 
 
 def generic_finite_cylinder_density(
@@ -161,11 +157,6 @@ def generic_finite_cylinder_density(
     """
     length = finite_straight_filament_spine_params.length
     R, phi, norm_z = Rphiz_from_xyz(x, finite_straight_filament_spine_params)
-    # R = jnp.where(
-    #     z < length / 2,
-    #     R,
-    #     jnp.inf,  # Push point to infinity if incident point is outside of cylinder
-    # ).squeeze()
 
     return soft_cylinder_cutoff_along_z(
         eval_density(R, phi, density_params), norm_z, length

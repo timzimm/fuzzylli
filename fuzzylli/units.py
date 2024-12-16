@@ -1,10 +1,6 @@
 import numpy as np
-import logging
 
 import fuzzylli.cosmology as cosmo
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 
 class Units:
@@ -105,12 +101,6 @@ class Units:
         self.to_Msun_per_Mpc3 = 1.0 / self.from_Msun_per_Mpc3
         self.to_Gev_per_cm3 = 1.0 / self.from_Gev_per_cm3
         self.to_hbar = 1.0 / self.from_hbar
-        logger.debug(
-            "Code units "
-            f"L = {1.0 * self.to_Kpc:.3f} Kpc, "
-            f"T={1.0*self.to_Gyr:.3f} Gyr, "
-            f"M={1.0 * self.to_Msun:.3f} Msun"
-        )
 
 
 def set_schroedinger_units(m22):
