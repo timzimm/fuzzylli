@@ -22,6 +22,9 @@ _Self-consistent construction of virialized wave dark matter halos_
 <br>
 [3] [Dalal et al. (2021)](https://arxiv.org/abs/2011.13141):
 _Don't cross the streams: caustics from fuzzy dark matter_
+<br>
+[4] [Zimmermann et al. (2024)](https://arxiv.org/abs/2405.20374):
+_Dwarf galaxies imply dark matter is heavier thani 2.2 zeV_
 
 <figure>
   <img src="https://github.com/timzimm/fuzzylli/blob/0d792d8d018cb6a44108581965902cfc148f8aeb/images/comparison.png" alt="" width="750" align="center">
@@ -30,7 +33,7 @@ _Don't cross the streams: caustics from fuzzy dark matter_
 </figure>
 <br/><br/>
 
-The result is an effective, and efficient surrogate model for the FDM wave function in 
+The result is a surrogate model for the FDM wave function in 
 cylindrical symmetry. We refer to [our paper](#citing-fuzzylli)
 for an in depth exposition of fuzzylli's underlying assumptions, physics and application
 to cosmology.
@@ -38,7 +41,7 @@ to cosmology.
 fuzzylli is built on [jax](https://github.com/google/jax) such that compuation of observables 
 involving the FDM wavefunction
 (including its derivatives via `jax.grad`) are trivial (thanks to `jax.vmap`) and 
-efficient (thanks to `jax.jit`) to implement.
+reasonably efficient (thanks to `jax.jit`).
 
 <figure>
   <img src="https://github.com/timzimm/fuzzylli/blob/2aecf2029754e7ef9d86a9b11a99cb1d6d2603c6/images/crosssections.png" alt="" width="750" align="center">
@@ -54,8 +57,7 @@ the ellipsoidal collapse model, making an end-to-end computation of mass
 functions (filaments, haloes, sheets) possible without the need to invoke literature fit 
 results.
 
-**This is a research project. Expect bugs, report bugs, fix more bugs than you
-create.**
+**This is a research project. Expect bugs**
 
 ## Installation
 fuzzylli is pre-alpha and currently meant as an internal tool. No real efforts
@@ -78,15 +80,13 @@ The latter might need some manual compilation labor. We refer to the [h5py
 Documentation](https://docs.h5py.org/en/latest/mpi.html) for more information.
 
 ## Example
-To recreate the "eyes of sauron" plot at the top, i.e. filament cross sections as a 
-function of FDM mass,  open ... which showcases the main functionalty of fuzzylli.
+We refer to our [paper repository](https://github.com/timzimm/fdm_filaments) for
+examples.
 
 ## Citing fuzzylli
 If you use fuzzylli for any publication we kindly ask you to cite
 TODO
 
 ## Acknowledgement
-<div align="center">
-<img
-src="https://github.com/timzimm/fuzzylli/blob/820bc2c270556f4b9208f09224c53764eb6651d1/images/eu_acknowledgement_compsci_3.png" alt="logo"></img>
-</div>
+![eu](https://github.com/james-alvey-42/jaxsp/blob/67be7bc188841bdf2bed02e72659245f0a2b2a1b/images/eu_acknowledgement_compsci_3.png#gh-light-mode-only)
+![eu](https://github.com/james-alvey-42/jaxsp/blob/0a2a65a2cca5f1f8c2d6591d2a9e48cabb41ff96/images/eu_acknowledgement_compsci_3_white.png#gh-dark-mode-only)
