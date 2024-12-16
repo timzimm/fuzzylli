@@ -68,16 +68,6 @@ $ git clone https://github.com/timzimm/fuzzylli.git
 $ cd fuzzylli
 $ pip install -e .
 ```
-If you want to be able to populate three dimensional boxes with a cylinder gas
-(i.e. using [generate_density.py](https://github.com/timzimm/fuzzylli/blob/3c4ba7e048d663de7ae41750a81384ec8030dd77/fuzzylli/generate_density.py)),
-replace the last command with:
-```console
-$ pip install -e ".[3D]"
-```
-This will require `mpi4py` as well as a parallel `h5py` build.
-Make sure these exist in your envirnoment.
-The latter might need some manual compilation labor. We refer to the [h5py
-Documentation](https://docs.h5py.org/en/latest/mpi.html) for more information.
 
 ## Example
 We refer to our [paper repository](https://github.com/timzimm/fdm_filaments) for
