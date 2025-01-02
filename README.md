@@ -52,11 +52,6 @@ The name is inspired by the Fussilli noodle (wavy long pasta). We gloss over the
 fact that the final filaments look more like Rigatoni at the moment
 :man_shrugging:.
 
-Loosely related, fuzzylli also provides a differentiable jax implementation of
-the ellipsoidal collapse model, making an end-to-end computation of mass
-functions (filaments, haloes, sheets) possible without the need to invoke literature fit 
-results.
-
 **This is a research project. Expect bugs**
 
 ## Installation
